@@ -19,12 +19,12 @@ export default async function BacsSetupCompletePage({ searchParams }: Props) {
           </div>
         </div>
         <h1 className="text-center text-xl font-semibold text-slate-900">
-          {canceled ? 'Setup cancelled' : 'Thank you for setting up your Hungry Tum account'}
+          {canceled ? 'Direct Debit setup not completed' : 'Direct Debit set up'}
         </h1>
         <p className="mt-3 text-center text-sm text-slate-600">
           {canceled
-            ? 'You cancelled the setup. You can set up BACS again when Hungry Tum sends you a new link.'
-            : 'Your BACS Direct Debit has been set up successfully. Hungry Tum will send you an invoice with up to three days’ notice before collecting payment for the previous week’s gross revenue, once all your payouts have been resolved. You can close this window.'}
+            ? 'You chose not to complete the Direct Debit setup just now. If you change your mind, Hungry Tum can send you a new link at any time.'
+            : 'Thanks for setting up Direct Debit. We’ll email you an invoice and give you notice before any payments are collected, using the same weekly schedule you see in your Hungry Tum invoices.'}
         </p>
         <p className="mt-6 text-center text-xs text-slate-400">
           Hungry Tum

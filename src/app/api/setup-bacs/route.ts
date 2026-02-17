@@ -107,14 +107,13 @@ export async function POST(request: NextRequest) {
     const { error: emailError } = await resend.emails.send({
       from: fromEmail,
       to: franchisee.email,
-      subject: 'Set up your BACS payment with Hungry Tum',
+      subject: 'Hungry Tum have invited you',
       html: `
         <p>Hi ${firstName},</p>
-        <p>Hungry Tum has requested that you set up BACS Direct Debit so we can collect your franchise fees securely from your UK bank account.</p>
-        <p>Click the link below to add your bank details. The link is valid for 24 hours.</p>
-        <p><a href="${setupUrl}" style="display:inline-block; background:#ea580c; color:#fff; padding:12px 24px; text-decoration:none; border-radius:8px; font-weight:600;">Set up BACS</a></p>
-        <p>Or copy this link: ${setupUrl}</p>
-        <p>If you didn’t expect this email, you can ignore it.</p>
+        <p>Hungry Tum have invited you to set up a BACS Direct Debit securely for your weekly franchise fee.</p>
+        <p>You only pay when you’ve been paid by the platforms, and you will always receive an invoice and notice before any payment is taken.</p>
+        <p><a href="${setupUrl}" style="display:inline-block; background:#ea580c; color:#fff; padding:12px 24px; text-decoration:none; border-radius:8px; font-weight:600;">Set up Direct Debit</a></p>
+        <p>Or copy this link into your browser: ${setupUrl}</p>
         <p>— Hungry Tum</p>
       `,
     });
