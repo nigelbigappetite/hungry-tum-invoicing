@@ -14,12 +14,15 @@ interface FileUploadProps {
     file_type: 'csv' | 'pdf';
     confidence: string;
     file_name: string;
+    /** When Deliveroo PDF has multiple Hungry Tum brands (e.g. Bethnal Green), per-brand Total Order Value. */
+    deliveroo_brand_breakdown?: Record<string, number>;
   }) => void;
   onClear: () => void;
   result?: {
     gross_revenue: number;
     file_name: string;
     confidence: string;
+    deliveroo_brand_breakdown?: Record<string, number>;
   } | null;
 }
 
@@ -79,6 +82,7 @@ export default function FileUpload({
         file_type: data.file_type,
         confidence: data.confidence,
         file_name: file.name,
+        ...(data.deliveroo_brand_breakdown && { deliveroo_brand_breakdown: data.deliveroo_brand_breakdown }),
       });
     } catch {
       // Network/other failure – still allow manual entry with the uploaded file.

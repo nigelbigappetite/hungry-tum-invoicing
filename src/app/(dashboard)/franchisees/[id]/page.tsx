@@ -58,6 +58,8 @@ interface PlatformResult {
   file_type: 'csv' | 'pdf';
   confidence: string;
   file_name: string;
+  /** When Deliveroo PDF has multiple Hungry Tum brands (e.g. Bethnal Green), per-brand Total Order Value. */
+  deliveroo_brand_breakdown?: Record<string, number>;
 }
 
 interface InvoiceWithFranchisee extends Invoice {
@@ -295,6 +297,16 @@ export default function FranchiseeDetailPage() {
     Array.isArray(franchisee?.brands) && franchisee.brands.length > 0
       ? franchisee.brands
       : [...BRAND_OPTIONS];
+
+  /** For Deliveroo: use statement breakdown if present, else synthesize one (total under Wing Shack) so three lines always show. */
+  const getDeliverooBreakdown = (row: UploadRow): Record<string, number> | undefined => {
+    if (row.platform !== 'deliveroo' || !row.result) return undefined;
+    const bd = row.result.deliveroo_brand_breakdown;
+    if (bd && Object.keys(bd).length > 0) return bd;
+    const rev = row.result.gross_revenue ?? parseFloat(row.editableRevenue || '0') || 0;
+    return { 'Eggs n Stuff': 0, 'SMSH BN': 0, 'Wing Shack': Math.round(rev * 100) / 100 };
+  };
+
   const isPercentageBased =
     franchisee?.payment_model === 'percentage' ||
     franchisee?.payment_model === 'percentage_per_platform';
@@ -307,7 +319,10 @@ export default function FranchiseeDetailPage() {
               ...row,
               result,
               editableRevenue: result.gross_revenue.toString(),
-              brand: row.brand?.trim() || uploadBrandOptions[0] || '',
+              brand:
+                row.platform === 'deliveroo'
+                  ? '__multibrand__'
+                  : row.brand?.trim() || uploadBrandOptions[0] || '',
             }
           : row
       )
@@ -342,6 +357,8 @@ export default function FranchiseeDetailPage() {
   const weekEndStr = format(weekEnd, 'yyyy-MM-dd');
   const rowsWithData = uploadRows.filter((r) => r.result !== null);
   const totalGross = rowsWithData.reduce((sum, r) => {
+    const bd = getDeliverooBreakdown(r);
+    if (bd) return sum + Object.values(bd).reduce((a, b) => a + b, 0);
     const val = parseFloat(r.editableRevenue || '0');
     return sum + (isNaN(val) ? 0 : val);
   }, 0);
@@ -350,10 +367,15 @@ export default function FranchiseeDetailPage() {
     franchisee?.payment_model === 'percentage_per_platform'
       ? Math.round(
           rowsWithData.reduce(
-            (sum, r) =>
-              sum +
-              (parseFloat(r.editableRevenue || '0') || 0) *
-                (getPlatformFeeRate(franchisee, r.platform) / 100),
+            (sum, r) => {
+              const bd = getDeliverooBreakdown(r);
+              if (bd) {
+                const rowTotal = Object.values(bd).reduce((a, b) => a + b, 0);
+                return sum + rowTotal * (getPlatformFeeRate(franchisee, r.platform) / 100);
+              }
+              const rev = parseFloat(r.editableRevenue || '0') || 0;
+              return sum + rev * (getPlatformFeeRate(franchisee, r.platform) / 100);
+            },
             0
           ) * 100
         ) / 100
@@ -388,7 +410,8 @@ export default function FranchiseeDetailPage() {
       return;
     }
     for (const row of rowsWithData) {
-      if (!row.brand?.trim()) {
+      const isDeliverooWithResult = row.platform === 'deliveroo' && row.result;
+      if (!isDeliverooWithResult && !row.brand?.trim()) {
         setUploadError(`Please select a brand for ${PLATFORM_LABELS[row.platform]}.`);
         return;
       }
@@ -398,32 +421,68 @@ export default function FranchiseeDetailPage() {
     try {
       for (const row of rowsWithData) {
         const result = row.result!;
-        const revenue = parseFloat(row.editableRevenue || '0');
-        const brand = row.brand.trim();
-        await supabase
-          .from('weekly_reports')
-          .delete()
-          .eq('franchisee_id', id)
-          .eq('brand', brand)
-          .eq('platform', row.platform)
-          .eq('week_start_date', weekStartStr)
-          .eq('week_end_date', weekEndStr);
-        const filePath = `reports/${id}/${weekStartStr}/${brand}-${row.platform}-${result.file.name}`;
-        await supabase.storage.from('invoicing').upload(filePath, result.file, { upsert: true });
-        const { error: insertError } = await supabase.from('weekly_reports').insert({
-          franchisee_id: id,
-          brand,
-          platform: row.platform,
-          week_start_date: weekStartStr,
-          week_end_date: weekEndStr,
-          gross_revenue: revenue,
-          file_path: filePath,
-          file_type: result.file_type,
-        });
-        if (insertError) throw insertError;
+        const bd = getDeliverooBreakdown(row);
+        const hasBreakdown = Boolean(bd && row.platform === 'deliveroo');
+
+        if (hasBreakdown && bd) {
+          const filePath = `reports/${id}/${weekStartStr}/deliveroo-multibrand-${result.file.name}`;
+          await supabase.storage.from('invoicing').upload(filePath, result.file, { upsert: true });
+          for (const [brand, amount] of Object.entries(bd)) {
+            await supabase
+              .from('weekly_reports')
+              .delete()
+              .eq('franchisee_id', id)
+              .eq('brand', brand)
+              .eq('platform', 'deliveroo')
+              .eq('week_start_date', weekStartStr)
+              .eq('week_end_date', weekEndStr);
+            const { error: insertError } = await supabase.from('weekly_reports').insert({
+              franchisee_id: id,
+              brand,
+              platform: 'deliveroo',
+              week_start_date: weekStartStr,
+              week_end_date: weekEndStr,
+              gross_revenue: Math.round(amount * 100) / 100,
+              file_path: filePath,
+              file_type: result.file_type,
+            });
+            if (insertError) throw insertError;
+          }
+        } else {
+          const revenue = parseFloat(row.editableRevenue || '0');
+          const brand = row.brand.trim();
+          await supabase
+            .from('weekly_reports')
+            .delete()
+            .eq('franchisee_id', id)
+            .eq('brand', brand)
+            .eq('platform', row.platform)
+            .eq('week_start_date', weekStartStr)
+            .eq('week_end_date', weekEndStr);
+          const filePath = `reports/${id}/${weekStartStr}/${brand}-${row.platform}-${result.file.name}`;
+          await supabase.storage.from('invoicing').upload(filePath, result.file, { upsert: true });
+          const { error: insertError } = await supabase.from('weekly_reports').insert({
+            franchisee_id: id,
+            brand,
+            platform: row.platform,
+            week_start_date: weekStartStr,
+            week_end_date: weekEndStr,
+            gross_revenue: revenue,
+            file_path: filePath,
+            file_type: result.file_type,
+          });
+          if (insertError) throw insertError;
+        }
       }
-      // Recompute invoice(s) from ALL aggregator reports for each brand+week (so adding a missing platform updates the existing invoice)
-      const brandsInBatch = [...new Set(rowsWithData.map((r) => r.brand.trim()))];
+      const brandsInBatch = [
+        ...new Set(
+          rowsWithData.flatMap((r) => {
+            const bd = getDeliverooBreakdown(r);
+            if (bd && r.platform === 'deliveroo') return Object.keys(bd);
+            return r.brand.trim() ? [r.brand.trim()] : [];
+          })
+        ),
+      ].filter(Boolean);
       for (const brand of brandsInBatch) {
         const { data: allReports } = await supabase
           .from('weekly_reports')
@@ -1163,22 +1222,26 @@ export default function FranchiseeDetailPage() {
                     {platformRows.map((row) => (
                       <div key={row.rowId} className="flex flex-col gap-2 rounded-lg border border-slate-100 dark:border-neutral-600 bg-slate-50/50 dark:bg-neutral-700/50 p-2">
                         <div className="flex items-center gap-2">
-                          <select
-                            value={row.brand}
-                            onChange={(e) =>
-                              setUploadRows((prev) =>
-                                prev.map((r) =>
-                                  r.rowId === row.rowId ? { ...r, brand: e.target.value } : r
+                          {platform === 'deliveroo' ? (
+                            <span className="text-xs text-slate-500 dark:text-neutral-400">Brands from statement</span>
+                          ) : (
+                            <select
+                              value={row.brand}
+                              onChange={(e) =>
+                                setUploadRows((prev) =>
+                                  prev.map((r) =>
+                                    r.rowId === row.rowId ? { ...r, brand: e.target.value } : r
+                                  )
                                 )
-                              )
-                            }
-                            className="rounded border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-2 py-1 text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                          >
-                            <option value="">Brand</option>
-                            {uploadBrandOptions.map((b) => (
-                              <option key={b} value={b}>{b}</option>
-                            ))}
-                          </select>
+                              }
+                              className="rounded border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-2 py-1 text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                            >
+                              <option value="">Brand</option>
+                              {uploadBrandOptions.map((b) => (
+                                <option key={b} value={b}>{b}</option>
+                              ))}
+                            </select>
+                          )}
                           {platformRows.length > 1 && (
                             <button
                               type="button"
@@ -1284,36 +1347,54 @@ export default function FranchiseeDetailPage() {
             <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
               <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-neutral-100">Review & confirm</h2>
               <div className="space-y-3">
-                {rowsWithData.map((row) => (
-                  <div key={row.rowId} className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
-                    <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
-                      {row.brand || '—'} · {PLATFORM_LABELS[row.platform]}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <span className="text-sm text-slate-500 dark:text-neutral-300">£</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={row.editableRevenue}
-                        onChange={(e) =>
-                          setUploadRows((prev) =>
-                            prev.map((r) =>
-                              r.rowId === row.rowId ? { ...r, editableRevenue: e.target.value } : r
+                {rowsWithData.flatMap((row) => {
+                  const bd = getDeliverooBreakdown(row);
+                  if (bd && row.platform === 'deliveroo') {
+                    return Object.entries(bd).map(([brand, amount]) => (
+                      <div key={`${row.rowId}-${brand}`} className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
+                        <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
+                          {brand} · {PLATFORM_LABELS[row.platform]}
+                        </span>
+                        <span className="text-sm font-medium text-slate-900 dark:text-neutral-100">
+                          {formatCurrency(amount)}
+                        </span>
+                      </div>
+                    ));
+                  }
+                  return (
+                    <div key={row.rowId} className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
+                      <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
+                        {row.brand || '—'} · {PLATFORM_LABELS[row.platform]}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-sm text-slate-500 dark:text-neutral-300">£</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={row.editableRevenue}
+                          onChange={(e) =>
+                            setUploadRows((prev) =>
+                              prev.map((r) =>
+                                r.rowId === row.rowId ? { ...r, editableRevenue: e.target.value } : r
+                              )
                             )
-                          )
-                        }
-                        className="w-36 rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-600 dark:text-neutral-100 px-3 py-1.5 text-sm font-medium focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                      />
+                          }
+                          className="w-36 rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-600 dark:text-neutral-100 px-3 py-1.5 text-sm font-medium focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {/* Per-platform fee breakdown */}
                 {franchisee.payment_model === 'percentage_per_platform' && rowsWithData.length > 0 && (
                   <div className="rounded-lg border border-slate-200 dark:border-neutral-600 bg-slate-50/50 dark:bg-neutral-700/50 p-3">
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-neutral-400">Fee breakdown by platform</p>
                     <ul className="space-y-1.5">
                       {rowsWithData.map((row) => {
-                        const rev = parseFloat(row.editableRevenue || '0') || 0;
+                        const bd = getDeliverooBreakdown(row);
+                        const rev = bd
+                          ? Object.values(bd).reduce((a, b) => a + b, 0)
+                          : parseFloat(row.editableRevenue || '0') || 0;
                         const pct = getPlatformFeeRate(franchisee, row.platform);
                         const platformFee = Math.round(rev * (pct / 100) * 100) / 100;
                         return (
