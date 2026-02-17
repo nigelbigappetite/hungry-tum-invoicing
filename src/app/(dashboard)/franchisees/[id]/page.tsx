@@ -14,6 +14,7 @@ import {
   WeeklyReport,
   BRAND_OPTIONS,
   AGGREGATOR_PLATFORMS,
+  type AggregatorPlatform,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -123,7 +124,7 @@ export default function FranchiseeDetailPage() {
   const [editInvoiceForm, setEditInvoiceForm] = useState({ total_gross_revenue: '', fee_amount: '', fee_percentage: '', week_start_date: '' });
 
   // Manual add missing platform (when CSV download from platform is blank)
-  const [manualAddPlatform, setManualAddPlatform] = useState<typeof AGGREGATOR_PLATFORMS[number]>('ubereats');
+  const [manualAddPlatform, setManualAddPlatform] = useState<AggregatorPlatform>('ubereats');
   const [manualAddAmount, setManualAddAmount] = useState('');
   const [manualAddSaving, setManualAddSaving] = useState(false);
   const [manualAddError, setManualAddError] = useState('');
@@ -499,7 +500,7 @@ export default function FranchiseeDetailPage() {
     setSaving(false);
   };
 
-  const saveManualReport = async (invoice: InvoiceWithFranchisee, platformOverride?: typeof AGGREGATOR_PLATFORMS[number]) => {
+  const saveManualReport = async (invoice: InvoiceWithFranchisee, platformOverride?: AggregatorPlatform) => {
     if (!id || !franchisee) return;
     const amount = parseFloat(manualAddAmount.replace(/[£,\s]/g, ''));
     if (!Number.isFinite(amount) || amount < 0) {
@@ -1682,7 +1683,7 @@ export default function FranchiseeDetailPage() {
                                         {(() => {
                                           const missingAggregator = (['deliveroo', 'ubereats', 'justeat'] as const).filter((p) => !rows.some((r) => r.platform === p));
                                           if (missingAggregator.length === 0) return null;
-                                          const platformValue = missingAggregator.includes(manualAddPlatform) ? manualAddPlatform : missingAggregator[0];
+                                          const platformValue: AggregatorPlatform = missingAggregator.includes(manualAddPlatform) ? manualAddPlatform : missingAggregator[0];
                                           return (
                                             <div className="mt-4 rounded-lg border border-slate-200 dark:border-neutral-600 bg-slate-50/50 dark:bg-neutral-700/30 p-3">
                                               <p className="text-xs font-medium text-slate-600 dark:text-neutral-300 mb-2">
@@ -1693,7 +1694,7 @@ export default function FranchiseeDetailPage() {
                                                   <label className="sr-only">Platform</label>
                                                   <select
                                                     value={platformValue}
-                                                    onChange={(e) => setManualAddPlatform(e.target.value as typeof manualAddPlatform)}
+                                                    onChange={(e) => setManualAddPlatform(e.target.value as AggregatorPlatform)}
                                                     className="rounded border border-slate-300 dark:border-neutral-500 bg-white dark:bg-neutral-700 text-sm text-slate-900 dark:text-neutral-100 px-2 py-1.5"
                                                   >
                                                     {missingAggregator.map((p) => (

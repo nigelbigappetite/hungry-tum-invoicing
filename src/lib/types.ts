@@ -76,7 +76,8 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
 };
 
 /** Platforms that use the standard report upload (CSV/PDF). Slerp uses a separate xlsx upload. */
-export const AGGREGATOR_PLATFORMS: Platform[] = ['deliveroo', 'ubereats', 'justeat'];
+export type AggregatorPlatform = 'deliveroo' | 'ubereats' | 'justeat';
+export const AGGREGATOR_PLATFORMS: AggregatorPlatform[] = ['deliveroo', 'ubereats', 'justeat'];
 
 export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   draft: 'Draft',

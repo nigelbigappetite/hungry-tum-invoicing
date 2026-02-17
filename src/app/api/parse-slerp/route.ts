@@ -16,7 +16,7 @@ function locationMatchesFile(franchiseeLocation: string, fileLocation: string): 
   if (b.includes(a) || a.includes(b)) return true;
   // Spreadsheet has "Loughton", franchisee may have "Wing Shack Co- Loughton" – compare to suffix after " - "
   const suffix = a.includes(' - ') ? a.split(' - ').pop()?.trim() ?? '' : '';
-  return suffix === b || (suffix && b.includes(suffix));
+  return suffix === b || !!(suffix && b.includes(suffix));
 }
 
 export async function POST(request: NextRequest) {
