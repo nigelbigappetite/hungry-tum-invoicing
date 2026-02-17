@@ -17,6 +17,7 @@
     "next": "16.1.6",
     "papaparse": "^5.5.3",
     "pdf-parse": "^2.4.5",
+    "pdfjs-serverless": "^1.1.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "resend": "^6.9.2",

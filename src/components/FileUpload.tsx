@@ -40,6 +40,12 @@ export default function FileUpload({
     setParsing(true);
     setError('');
 
+    const inferFileType = (f: File): 'csv' | 'pdf' => {
+      const name = f.name.toLowerCase();
+      if (name.endsWith('.csv')) return 'csv';
+      return 'pdf';
+    };
+
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -53,8 +59,16 @@ export default function FileUpload({
       const data = await response.json();
 
       if (!response.ok) {
-        setError(data.error || 'Failed to parse file');
-        setParsing(false);
+        // Fallback: allow manual entry while still uploading/storing the original file.
+        setError(data.error || 'Could not read the file. Enter the total manually.');
+        onResult({
+          platform,
+          gross_revenue: 0,
+          file,
+          file_type: inferFileType(file),
+          confidence: 'manual',
+          file_name: file.name,
+        });
         return;
       }
 
@@ -67,10 +81,19 @@ export default function FileUpload({
         file_name: file.name,
       });
     } catch {
-      setError('Failed to parse file. Please try again.');
+      // Network/other failure – still allow manual entry with the uploaded file.
+      setError('Failed to parse file. Enter the total manually.');
+      onResult({
+        platform,
+        gross_revenue: 0,
+        file,
+        file_type: inferFileType(file),
+        confidence: 'manual',
+        file_name: file.name,
+      });
+    } finally {
+      setParsing(false);
     }
-
-    setParsing(false);
   };
 
   const handleClear = () => {

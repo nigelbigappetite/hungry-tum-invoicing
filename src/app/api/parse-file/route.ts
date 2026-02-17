@@ -4,28 +4,46 @@ import { extractRevenueFromText, extractWeekFromFilename } from '@/lib/parsers/p
 import { extractRevenueFromHTML } from '@/lib/parsers/html-parser';
 import { Platform } from '@/lib/types';
 
-/** Use Node.js runtime so pdf-parse (pdfjs-dist) works reliably. */
+/** Use Node.js runtime so PDF parsing works reliably in Vercel functions. */
 export const runtime = 'nodejs';
+/** Allow up to 60s for large PDFs (e.g. Deliveroo statements) on Vercel. */
+export const maxDuration = 60;
 
-/**
- * Extract text from a PDF using the pdf-parse PDFParse class.
- * API: new PDFParse({ data: buffer }), then parser.getText() → result.text
- * Use resolve to force CJS build in Node (avoids bundler picking ESM/browser build).
- */
+/** Max PDF size to avoid timeouts/OOM in serverless (15MB). */
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+
 async function extractPDFText(buffer: Buffer): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mod = require('pdf-parse');
-  const PDFParse = mod.PDFParse ?? mod.default?.PDFParse ?? mod;
-  if (typeof PDFParse !== 'function') {
-    throw new Error('pdf-parse: PDFParse not found');
-  }
+  // Use pdfjs-serverless (pure JS, serverless-friendly PDF.js build).
+  const { getDocument } = await import('pdfjs-serverless');
 
-  const parser = new PDFParse({ data: buffer });
-  const result = await parser.getText();
-  if (typeof parser.destroy === 'function') {
-    await parser.destroy();
+  const loadingTask = getDocument({
+    data: new Uint8Array(buffer),
+    useSystemFonts: true,
+  });
+
+  const doc = await loadingTask.promise;
+  try {
+    let fullText = '';
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const page: any = await doc.getPage(pageNum);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const textContent: any = await page.getTextContent();
+      const pageText = textContent.items
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((item: any) => (typeof item.str === 'string' ? item.str : ''))
+        .join(' ');
+      fullText += pageText + '\n';
+    }
+    return fullText.trim();
+  } finally {
+    // Clean up PDF document resources if supported.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyDoc: any = doc as any;
+    if (typeof anyDoc.destroy === 'function') {
+      await anyDoc.destroy();
+    }
   }
-  return result.text ?? result.pages.map((p: { text: string }) => p.text).join('\n');
 }
 
 /**
@@ -90,6 +108,14 @@ export async function POST(request: NextRequest) {
     // PDF files (Deliveroo statements, Uber Eats invoices)
     if (isPDF) {
       const buffer = Buffer.from(await file.arrayBuffer());
+      if (buffer.length > MAX_PDF_BYTES) {
+        return NextResponse.json(
+          {
+            error: `PDF is too large (max ${MAX_PDF_BYTES / 1024 / 1024}MB). Try a shorter date range or use CSV if available.`,
+          },
+          { status: 400 }
+        );
+      }
       let text: string;
       try {
         text = await extractPDFText(buffer);
@@ -101,7 +127,7 @@ export async function POST(request: NextRequest) {
           {
             error: isDev
               ? `PDF failed: ${err.message}`
-              : 'Could not read the PDF. Please ensure the file is a valid PDF (e.g. Deliveroo Payment Statement) and try again.',
+              : 'Could not read the PDF. For Deliveroo, re-download the Payment Statement PDF or try exporting CSV from the partner hub.',
           },
           { status: 400 }
         );
