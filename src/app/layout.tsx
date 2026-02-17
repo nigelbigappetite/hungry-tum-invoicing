@@ -16,6 +16,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Hungry Tum Invoicing',
   description: 'Franchisee invoicing system for Hungry Tum',
+  icons: {
+    icon: '/Hungry%20Tum%20Logo.png',
+    apple: '/Hungry%20Tum%20Logo.png',
+  },
 };
 
 export default function RootLayout({

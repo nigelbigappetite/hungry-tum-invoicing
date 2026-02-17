@@ -206,6 +206,11 @@ export default function FileUpload({
                   <p className="mt-0.5 text-xs text-slate-400">
                     CSV, PDF, or DOC from {PLATFORM_LABELS[platform]}
                   </p>
+                  {platform === 'ubereats' && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      If the Uber Eats CSV is blank, upload it anyway and enter the total manually.
+                    </p>
+                  )}
                 </div>
               </>
             )}
