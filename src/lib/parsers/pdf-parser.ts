@@ -94,11 +94,11 @@ function sumHungryTumTotalOrderValueInText(textSlice: string): { sum: number; fo
         );
         const amountMatch = afterBrand.match(/Total\s+Order\s+Value[\s\S]*?(?:£|\b)([\d,]+\.\d{2})\b/);
         if (amountMatch?.[1]) {
-          m = [amountMatch[0], brandMatch[0], amountMatch[1]] as unknown as RegExpExecArray;
+          foundAny = true;
+          sum += parseFloat(amountMatch[1].replace(/,/g, ''));
         }
       }
-    }
-    if (m) {
+    } else if (m) {
       foundAny = true;
       const amountStr = m[2]?.replace(/,/g, '');
       if (amountStr) sum += parseFloat(amountStr);
