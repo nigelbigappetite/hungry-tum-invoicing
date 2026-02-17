@@ -48,6 +48,8 @@ export interface Invoice {
   invoice_number: string;
   franchisee_id: string;
   brand: string | null;
+  /** All brands on this combined weekly invoice (for logo display). When set, brand may be null. */
+  brands?: string[] | null;
   week_start_date: string;
   week_end_date: string;
   total_gross_revenue: number;

@@ -26,7 +26,7 @@ import {
   getWeekRangeFromDate,
   cn,
 } from '@/lib/utils';
-import { getPlatformLogo } from '@/lib/logos';
+import { getPlatformLogo, getBrandLogo } from '@/lib/logos';
 import { startOfWeek, endOfWeek, format, addDays, parseISO } from 'date-fns';
 import FileUpload from '@/components/FileUpload';
 import {
@@ -179,23 +179,27 @@ export default function FranchiseeDetailPage() {
     setLoadingPlatformRevenue(true);
     const { data: invoiceWeeks } = await supabase
       .from('invoices')
-      .select('brand, week_start_date, week_end_date')
+      .select('brand, brands, week_start_date, week_end_date')
       .eq('franchisee_id', id);
-    const weekKeys = new Set(
-      (invoiceWeeks || []).map(
-        (r: { brand: string | null; week_start_date: string; week_end_date: string }) =>
-          `${(r.brand ?? '').trim()}|${r.week_start_date}|${r.week_end_date}`
-      )
-    );
-    // Slerp uses Tue–Mon weeks; map each invoice week to its Slerp pay-week key so Slerp revenue is included
+    const weekKeys = new Set<string>();
     const slerpWeekKeys = new Set<string>();
-    (invoiceWeeks || []).forEach((r: { brand: string | null; week_start_date: string; week_end_date: string }) => {
-      const brand = (r.brand ?? '').trim();
-      if (!brand) return;
-      const slerpWeekEnd = getSlerpSalesPeriodEndForInvoiceWeek(r.week_end_date);
-      const slerpWeekStart = format(addDays(parseISO(slerpWeekEnd), -6), 'yyyy-MM-dd');
-      slerpWeekKeys.add(`${brand}|${slerpWeekStart}|${slerpWeekEnd}`);
-    });
+    (invoiceWeeks || []).forEach(
+      (r: {
+        brand: string | null;
+        brands?: string[] | null;
+        week_start_date: string;
+        week_end_date: string;
+      }) => {
+        const brandsList =
+          r.brands && r.brands.length > 0 ? r.brands : r.brand?.trim() ? [r.brand.trim()] : [];
+        brandsList.forEach((brand) => {
+          weekKeys.add(`${brand}|${r.week_start_date}|${r.week_end_date}`);
+          const slerpWeekEnd = getSlerpSalesPeriodEndForInvoiceWeek(r.week_end_date);
+          const slerpWeekStart = format(addDays(parseISO(slerpWeekEnd), -6), 'yyyy-MM-dd');
+          slerpWeekKeys.add(`${brand}|${slerpWeekStart}|${slerpWeekEnd}`);
+        });
+      }
+    );
     const { data: reportRows, error } = await supabase
       .from('weekly_reports')
       .select('platform, gross_revenue, brand, week_start_date, week_end_date')
@@ -483,63 +487,71 @@ export default function FranchiseeDetailPage() {
           })
         ),
       ].filter(Boolean);
-      for (const brand of brandsInBatch) {
-        const { data: allReports } = await supabase
-          .from('weekly_reports')
-          .select('platform, gross_revenue')
-          .eq('franchisee_id', id)
-          .eq('brand', brand)
-          .eq('week_start_date', weekStartStr)
-          .eq('week_end_date', weekEndStr)
-          .in('platform', ['deliveroo', 'ubereats', 'justeat']);
-        const totalGrossBrand =
-          (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
-        const totalFeeBrand =
-          franchisee.payment_model === 'percentage_per_platform'
-            ? (allReports || []).reduce(
-                (s, r) =>
-                  s +
-                  Math.round(
-                    Number(r.gross_revenue ?? 0) * (getPlatformFeeRate(franchisee, r.platform) / 100) * 100
-                  ) / 100,
-                0
-              )
-            : Math.round(totalGrossBrand * ((franchisee.percentage_rate ?? 6) / 100) * 100) / 100;
-        const roundedGross = Math.round(totalGrossBrand * 100) / 100;
-        const roundedFee = Math.round(totalFeeBrand * 100) / 100;
-        const effectivePct =
-          roundedGross > 0 ? Math.round((roundedFee / roundedGross) * 10000) / 100 : (franchisee.percentage_rate ?? 6);
-        const { data: existing } = await supabase
+
+      // One combined Hungry Tum invoice per franchisee per week (all brands)
+      const { data: allReports } = await supabase
+        .from('weekly_reports')
+        .select('platform, gross_revenue')
+        .eq('franchisee_id', id)
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr)
+        .in('platform', ['deliveroo', 'ubereats', 'justeat']);
+      const totalGrossAll =
+        (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
+      const totalFeeAll =
+        franchisee.payment_model === 'percentage_per_platform'
+          ? (allReports || []).reduce(
+              (s, r) =>
+                s +
+                Math.round(
+                  Number(r.gross_revenue ?? 0) * (getPlatformFeeRate(franchisee, r.platform) / 100) * 100
+                ) / 100,
+              0
+            )
+          : Math.round(totalGrossAll * ((franchisee.percentage_rate ?? 6) / 100) * 100) / 100;
+      const roundedGross = Math.round(totalGrossAll * 100) / 100;
+      const roundedFee = Math.round(totalFeeAll * 100) / 100;
+      const effectivePct =
+        roundedGross > 0 ? Math.round((roundedFee / roundedGross) * 10000) / 100 : (franchisee.percentage_rate ?? 6);
+
+      const { data: existingInvoices } = await supabase
+        .from('invoices')
+        .select('id, status, created_at')
+        .eq('franchisee_id', id)
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr)
+        .order('created_at', { ascending: true });
+      const toKeep = existingInvoices?.[0];
+      const toDelete = (existingInvoices || []).slice(1);
+
+      for (const inv of toDelete) {
+        await supabase.from('invoices').delete().eq('id', inv.id);
+      }
+      if (toKeep) {
+        const { error: updateError } = await supabase
           .from('invoices')
-          .select('id, status')
-          .eq('franchisee_id', id)
-          .eq('brand', brand)
-          .eq('week_start_date', weekStartStr)
-          .eq('week_end_date', weekEndStr)
-          .maybeSingle();
-        if (existing) {
-          const { error: updateError } = await supabase
-            .from('invoices')
-            .update({
-              total_gross_revenue: roundedGross,
-              fee_percentage: effectivePct,
-              fee_amount: roundedFee,
-            })
-            .eq('id', existing.id);
-          if (updateError) throw updateError;
-        } else {
-          const { error: insertInvoiceError } = await supabase.from('invoices').insert({
-            franchisee_id: id,
-            brand,
-            week_start_date: weekStartStr,
-            week_end_date: weekEndStr,
+          .update({
             total_gross_revenue: roundedGross,
             fee_percentage: effectivePct,
             fee_amount: roundedFee,
-            status: 'draft',
-          });
-          if (insertInvoiceError) throw insertInvoiceError;
-        }
+            brand: null,
+            brands: brandsInBatch.length > 0 ? brandsInBatch : null,
+          })
+          .eq('id', toKeep.id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertInvoiceError } = await supabase.from('invoices').insert({
+          franchisee_id: id,
+          brand: null,
+          brands: brandsInBatch.length > 0 ? brandsInBatch : null,
+          week_start_date: weekStartStr,
+          week_end_date: weekEndStr,
+          total_gross_revenue: roundedGross,
+          fee_percentage: effectivePct,
+          fee_amount: roundedFee,
+          status: 'draft',
+        });
+        if (insertInvoiceError) throw insertInvoiceError;
       }
       setUploadSuccess(true);
       setUploadRows(AGGREGATOR_PLATFORMS.map((platform) => ({
@@ -569,7 +581,8 @@ export default function FranchiseeDetailPage() {
     setManualAddError('');
     setManualAddSaving(true);
     const platform = platformOverride ?? manualAddPlatform;
-    const brand = (invoice.brand ?? '').trim();
+    const isCombined = invoice.brands && invoice.brands.length > 0;
+    const brand = isCombined ? (invoice.brands![0] ?? '').trim() : (invoice.brand ?? '').trim();
     const weekStartStr = invoice.week_start_date;
     const weekEndStr = invoice.week_end_date;
     try {
@@ -589,12 +602,11 @@ export default function FranchiseeDetailPage() {
         .from('weekly_reports')
         .select('platform, gross_revenue')
         .eq('franchisee_id', id)
-        .eq('brand', brand)
         .eq('week_start_date', weekStartStr)
         .eq('week_end_date', weekEndStr)
         .in('platform', ['deliveroo', 'ubereats', 'justeat']);
-      const totalGrossBrand = (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
-      const totalFeeBrand =
+      const totalGrossAll = (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
+      const totalFeeAll =
         franchisee.payment_model === 'percentage_per_platform'
           ? (allReports || []).reduce(
               (s, r) =>
@@ -602,9 +614,9 @@ export default function FranchiseeDetailPage() {
                 Math.round(Number(r.gross_revenue ?? 0) * (getPlatformFeeRate(franchisee, r.platform) / 100) * 100) / 100,
               0
             )
-          : Math.round(totalGrossBrand * ((franchisee.percentage_rate ?? 6) / 100) * 100) / 100;
-      const roundedGross = Math.round(totalGrossBrand * 100) / 100;
-      const roundedFee = Math.round(totalFeeBrand * 100) / 100;
+          : Math.round(totalGrossAll * ((franchisee.percentage_rate ?? 6) / 100) * 100) / 100;
+      const roundedGross = Math.round(totalGrossAll * 100) / 100;
+      const roundedFee = Math.round(totalFeeAll * 100) / 100;
       const effectivePct = roundedGross > 0 ? Math.round((roundedFee / roundedGross) * 10000) / 100 : (franchisee.percentage_rate ?? 6);
       const { error: updateErr } = await supabase
         .from('invoices')
@@ -612,7 +624,7 @@ export default function FranchiseeDetailPage() {
         .eq('id', invoice.id);
       if (updateErr) throw updateErr;
       setManualAddAmount('');
-      fetchReports(invoice.id, weekStartStr, weekEndStr, invoice.brand ?? null);
+      fetchReports(invoice.id, weekStartStr, weekEndStr, isCombined ? null : (invoice.brand ?? null));
       fetchInvoices();
       fetchPlatformRevenue();
     } catch (err) {
@@ -713,11 +725,12 @@ export default function FranchiseeDetailPage() {
     if (expandedId === invoice.id) setExpandedId(null);
     else {
       setExpandedId(invoice.id);
+      const isCombined = invoice.brands && invoice.brands.length > 0;
       fetchReports(
         invoice.id,
         invoice.week_start_date,
         invoice.week_end_date,
-        invoice.brand ?? null
+        isCombined ? null : (invoice.brand ?? null)
       );
     }
   };
@@ -1513,9 +1526,36 @@ export default function FranchiseeDetailPage() {
                           <span className="text-sm font-semibold text-slate-900 dark:text-neutral-100">{invoice.invoice_number}</span>
                         </td>
                         <td className="px-5 py-3.5">
-                          <span className="text-sm text-slate-600 dark:text-neutral-300">
-                            {invoice.brand?.trim() || '—'}
-                          </span>
+                          {(() => {
+                            const brandsList =
+                              (invoice.brands && invoice.brands.length > 0
+                                ? invoice.brands
+                                : invoice.brand?.trim()
+                                  ? [invoice.brand.trim()]
+                                  : []) as string[];
+                            if (brandsList.length === 0)
+                              return <span className="text-sm text-slate-500 dark:text-neutral-400">—</span>;
+                            return (
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {brandsList.map((b) => {
+                                  const logo = getBrandLogo(b);
+                                  return logo ? (
+                                    <img
+                                      key={b}
+                                      src={logo}
+                                      alt={b}
+                                      title={b}
+                                      className="h-6 w-6 rounded object-contain"
+                                    />
+                                  ) : (
+                                    <span key={b} className="text-xs text-slate-600 dark:text-neutral-300">
+                                      {b}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="px-5 py-3.5">
                           <span className="text-sm text-slate-500 dark:text-neutral-400">

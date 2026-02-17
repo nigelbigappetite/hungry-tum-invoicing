@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Franchisee not found' }, { status: 404 });
     }
 
-    // Fetch aggregator weekly reports for this invoice period (Mon–Sun)
+    // Fetch aggregator weekly reports for this invoice period (Mon–Sun). Combined invoice: no brand filter.
     let reportsQuery = supabase
       .from('weekly_reports')
       .select('*')
@@ -47,7 +47,8 @@ export async function POST(request: NextRequest) {
       .eq('week_start_date', invoice.week_start_date)
       .eq('week_end_date', invoice.week_end_date)
       .in('platform', ['deliveroo', 'ubereats', 'justeat']);
-    if (invoice.brand?.trim()) {
+    const isCombinedInvoice = invoice.brands && Array.isArray(invoice.brands) && invoice.brands.length > 0;
+    if (!isCombinedInvoice && invoice.brand?.trim()) {
       reportsQuery = reportsQuery.eq('brand', invoice.brand.trim());
     }
     const { data: reports, error: reportsError } = await reportsQuery.order('platform');
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest) {
       .eq('franchisee_id', invoice.franchisee_id)
       .eq('platform', 'slerp')
       .eq('week_end_date', slerpSalesPeriodEnd);
-    if (invoice.brand?.trim()) {
+    if (!isCombinedInvoice && invoice.brand?.trim()) {
       slerpQuery = slerpQuery.eq('brand', invoice.brand.trim());
     }
     const { data: slerpReports } = await slerpQuery.order('week_start_date');
