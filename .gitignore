@@ -37,6 +37,9 @@ yarn-error.log*
 .env.development
 .env.production
 
+# npm cache (do not commit)
+.npm-cache
+
 # vercel
 .vercel
 
