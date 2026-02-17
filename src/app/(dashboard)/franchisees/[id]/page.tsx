@@ -303,7 +303,7 @@ export default function FranchiseeDetailPage() {
     if (row.platform !== 'deliveroo' || !row.result) return undefined;
     const bd = row.result.deliveroo_brand_breakdown;
     if (bd && Object.keys(bd).length > 0) return bd;
-    const rev = row.result.gross_revenue ?? parseFloat(row.editableRevenue || '0') || 0;
+    const rev = row.result.gross_revenue ?? (parseFloat(row.editableRevenue || '0') || 0);
     return { 'Eggs n Stuff': 0, 'SMSH BN': 0, 'Wing Shack': Math.round(rev * 100) / 100 };
   };
 
