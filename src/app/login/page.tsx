@@ -86,7 +86,7 @@ function LoginPageContent() {
             />
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Hungry Tum</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-slate-600">
             Franchise Invoicing System
           </p>
         </div>
@@ -138,7 +138,7 @@ function LoginPageContent() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                     placeholder="you@hungrytum.com"
                   />
                 </div>
@@ -154,7 +154,7 @@ function LoginPageContent() {
                       onChange={(e) => setPassword(e.target.value)}
                       required={!isForgotPassword}
                       minLength={6}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                      className="w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                       placeholder="Enter your password"
                     />
                   </div>
@@ -183,7 +183,7 @@ function LoginPageContent() {
                       setIsForgotPassword(true);
                       setError('');
                     }}
-                    className="text-sm text-slate-500 hover:text-primary"
+                    className="text-sm text-slate-600 hover:text-primary"
                   >
                     Forgot password?
                   </button>
@@ -196,7 +196,7 @@ function LoginPageContent() {
                     setResetSent(false);
                     setError('');
                   }}
-                  className="text-sm text-slate-500 hover:text-primary"
+                  className="text-sm text-slate-600 hover:text-primary"
                 >
                   {isSignUp
                     ? 'Already have an account? Sign in'
@@ -207,7 +207,7 @@ function LoginPageContent() {
           )}
         </div>
 
-        <p className="mt-6 text-center text-xs text-slate-400">
+        <p className="mt-6 text-center text-xs text-slate-600">
           Hungry Tum Franchise Invoicing &bull; Internal Use Only
         </p>
       </div>

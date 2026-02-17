@@ -133,6 +133,13 @@ export async function POST(request: NextRequest) {
         );
       }
       const result = extractRevenueFromText(text, platform);
+      if (platform === 'deliveroo' && process.env.NODE_ENV === 'development') {
+        console.log('[parse-file] Deliveroo PDF:', {
+          textLength: text.length,
+          gross_revenue: result.gross_revenue,
+          matched_pattern: result.matched_pattern,
+        });
+      }
       const weekFromText = result.week_start_date
         ? { week_start_date: result.week_start_date, week_end_date: result.week_end_date! }
         : null;

@@ -59,11 +59,80 @@ export function extractWeekFromFilename(fileName: string): { week_start_date: st
 }
 
 /**
+ * Hungry Tum brand names as they appear on Deliveroo Site Breakdown (case-insensitive, flexible spacing).
+ * Used to sum only these brands' Total Order Value and exclude others (e.g. Chitti Dosa).
+ */
+const DELIVEROO_HUNGRY_TUM_BRAND_PATTERNS: RegExp[] = [
+  /Eggs\s+[nN]\s+Stuff/i,
+  /Smash\s+Bun\s*\(\s*EC\s*\)|SMSH\s+BN/i,
+  /Wing\s+Shack\s+Co\s*[-–]\s*Bethnal\s+Green\s*\(\s*EC\s*\)/i,
+];
+
+/**
+ * Sum Total Order Value for Hungry Tum brands in a given text slice.
+ * Returns { sum, foundAny }. Uses first match per brand only.
+ * Tolerates flexible spacing and optional £ (some PDFs use different encoding).
+ */
+function sumHungryTumTotalOrderValueInText(textSlice: string): { sum: number; foundAny: boolean } {
+  let sum = 0;
+  let foundAny = false;
+  for (const brandRe of DELIVEROO_HUNGRY_TUM_BRAND_PATTERNS) {
+    // Primary: "Brand  Total Order Value  ...  £123.45" (allow optional £ before amount)
+    const rowRe = new RegExp(
+      `(${brandRe.source})\\s+Total\\s+Order\\s+Value\\s+[^£\\d]*(?:£)?([\\d,]+\\.?\\d*)`,
+      'gi'
+    );
+    let m = rowRe.exec(textSlice);
+    if (!m && textSlice.includes('Total Order Value')) {
+      // Fallback: brand then "Total Order Value" then amount within 300 chars (use new regex to avoid lastIndex)
+      const brandReFresh = new RegExp(brandRe.source, 'gi');
+      const brandMatch = brandReFresh.exec(textSlice);
+      if (brandMatch) {
+        const afterBrand = textSlice.slice(
+          brandMatch.index + brandMatch[0].length,
+          brandMatch.index + 350
+        );
+        const amountMatch = afterBrand.match(/Total\s+Order\s+Value[\s\S]*?(?:£|\b)([\d,]+\.\d{2})\b/);
+        if (amountMatch?.[1]) {
+          m = [amountMatch[0], brandMatch[0], amountMatch[1]] as RegExpExecArray;
+        }
+      }
+    }
+    if (m) {
+      foundAny = true;
+      const amountStr = m[2]?.replace(/,/g, '');
+      if (amountStr) sum += parseFloat(amountStr);
+    }
+  }
+  return { sum, foundAny };
+}
+
+/**
  * Deliveroo sends a Payment Statement PDF.
  * We must use "Total Order Value" only (total price of all menu items purchased by customers).
  * Do NOT use "Total payable to [company]" — that is net payout after commission/fees.
+ *
+ * When the PDF contains a "Site Breakdown" section (multi-brand), we sum Total Order Value
+ * for Hungry Tum brands only (Eggs N Stuff, Smash Bun (EC), Wing Shack Co - Bethnal Green (EC))
+ * and exclude other brands (e.g. Chitti Dosa).
  */
 function extractDeliverooRevenue(text: string): PDFParseResult {
+  const rawTextSnippet = text.substring(0, 2000);
+
+  // 1) First: sum Total Order Value for Hungry Tum brands anywhere in the document.
+  // This runs on the full extracted text so we always prefer per-brand totals when present,
+  // regardless of page order or "Site Breakdown" section boundaries.
+  const wholeDoc = sumHungryTumTotalOrderValueInText(text);
+  if (wholeDoc.foundAny) {
+    return {
+      gross_revenue: Math.round(wholeDoc.sum * 100) / 100,
+      confidence: 'high',
+      matched_pattern: 'Hungry Tum brands only (per-brand Total Order Value)',
+      raw_text: rawTextSnippet,
+    };
+  }
+
+  // 2) No Hungry Tum brand rows found: use first "Total Order Value" in document (single-brand statement)
   const totalOrderValue = text.match(
     /Total\s+Order\s+Value[^£]*£([\d,]+\.?\d*)/i
   );
@@ -72,14 +141,14 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
       gross_revenue: parseFloat(totalOrderValue[1].replace(/,/g, '')),
       confidence: 'high',
       matched_pattern: 'Total Order Value',
-      raw_text: text.substring(0, 2000),
+      raw_text: rawTextSnippet,
     };
   }
   return {
     gross_revenue: 0,
     confidence: 'low',
     matched_pattern: null,
-    raw_text: text.substring(0, 2000),
+    raw_text: rawTextSnippet,
   };
 }
 
