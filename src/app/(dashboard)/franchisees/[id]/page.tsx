@@ -1044,7 +1044,7 @@ export default function FranchiseeDetailPage() {
             <>
               <button
                 type="button"
-                onClick={setupBacs}
+                onClick={() => setupBacs()}
                 disabled={settingUpBacs}
                 className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
               >
