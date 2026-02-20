@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const franchiseeId = body?.franchiseeId ?? null;
+    const isReminder = body?.reminder === true;
     if (!franchiseeId || typeof franchiseeId !== 'string') {
       return NextResponse.json({ error: 'Franchisee ID is required' }, { status: 400 });
     }
@@ -104,18 +105,34 @@ export async function POST(request: NextRequest) {
 
     const resend = new Resend(resendKey);
     const firstName = franchisee.name?.split(/\s+/)[0] || 'there';
-    const { error: emailError } = await resend.emails.send({
-      from: fromEmail,
-      to: franchisee.email,
-      subject: 'Hungry Tum have invited you',
-      html: `
+
+    const subject = isReminder
+      ? 'Reminder: Complete set up of your Hungry Tum account – action required'
+      : 'Hungry Tum has invited you';
+
+    const html = isReminder
+      ? `
         <p>Hi ${firstName},</p>
-        <p>Hungry Tum have invited you to set up a BACS Direct Debit securely for your weekly franchise fee.</p>
-        <p>You only pay when you’ve been paid by the platforms, and you will always receive an invoice and notice before any payment is taken.</p>
+        <p>This is a reminder that we have not yet received your BACS Direct Debit setup. Completing this is required as outstanding fees are pending until completed.</p>
+        <p>Please use the link below to set up your Direct Debit as soon as possible. You only pay when you’ve been paid by the platforms, and you will always receive an invoice and notice before any payment is taken.</p>
         <p><a href="${setupUrl}" style="display:inline-block; background:#ea580c; color:#fff; padding:12px 24px; text-decoration:none; border-radius:8px; font-weight:600;">Set up Direct Debit</a></p>
         <p>Or copy this link into your browser: ${setupUrl}</p>
         <p>— Hungry Tum</p>
-      `,
+      `
+      : `
+        <p>Hi ${firstName},</p>
+        <p>Hungry Tum has invited you to set up a BACS Direct Debit securely for your weekly franchise fee.</p>
+        <p>You will always receive an invoice and prior notice before any payment is taken. You only pay when you've been paid out by the platforms for the previous week.</p>
+        <p><a href="${setupUrl}" style="display:inline-block; background:#ea580c; color:#fff; padding:12px 24px; text-decoration:none; border-radius:8px; font-weight:600;">Set up Direct Debit</a></p>
+        <p>Or copy this link into your browser: ${setupUrl}</p>
+        <p>— Hungry Tum</p>
+      `;
+
+    const { error: emailError } = await resend.emails.send({
+      from: fromEmail,
+      to: franchisee.email,
+      subject,
+      html,
     });
 
     if (emailError) {
@@ -128,7 +145,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Email sent to ${franchisee.email} with a link to set up BACS.`,
+      message: isReminder
+        ? `Reminder email sent to ${franchisee.email}.`
+        : `Email sent to ${franchisee.email} with a link to set up BACS.`,
     });
   } catch (error) {
     console.error('Setup BACS error:', error);

@@ -245,14 +245,14 @@ export default function FranchiseeDetailPage() {
     fetchPlatformRevenue();
   }, [fetchPlatformRevenue]);
 
-  const setupBacs = async () => {
+  const setupBacs = async (isReminder = false) => {
     if (!id) return;
     setSettingUpBacs(true);
     try {
       const res = await fetch('/api/setup-bacs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ franchiseeId: id }),
+        body: JSON.stringify({ franchiseeId: id, reminder: isReminder }),
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
@@ -1041,19 +1041,35 @@ export default function FranchiseeDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           {!franchisee.bacs_payment_method_id && (
-            <button
-              type="button"
-              onClick={setupBacs}
-              disabled={settingUpBacs}
-              className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-            >
-              {settingUpBacs ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 dark:border-neutral-500 border-t-slate-600 dark:border-t-neutral-400" />
-              ) : (
-                <Building2 className="h-4 w-4" />
-              )}
-              Set up BACS
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={setupBacs}
+                disabled={settingUpBacs}
+                className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+              >
+                {settingUpBacs ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 dark:border-neutral-500 border-t-slate-600 dark:border-t-neutral-400" />
+                ) : (
+                  <Building2 className="h-4 w-4" />
+                )}
+                Set up BACS
+              </button>
+              <button
+                type="button"
+                onClick={() => setupBacs(true)}
+                disabled={settingUpBacs}
+                title="Send a reminder that BACS setup is outstanding (missed payment)"
+                className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+              >
+                {settingUpBacs ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 dark:border-neutral-500 border-t-slate-600 dark:border-t-neutral-400" />
+                ) : (
+                  <Mail className="h-4 w-4" />
+                )}
+                Resend reminder
+              </button>
+            </>
           )}
           {franchisee.bacs_payment_method_id && (
             <button

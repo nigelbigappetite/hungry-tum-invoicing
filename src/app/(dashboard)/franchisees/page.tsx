@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Franchisee, BRAND_OPTIONS } from '@/lib/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import { Plus, Pencil, Trash2, MapPin, Mail, Building2, CheckCircle, ChevronRight, Banknote } from 'lucide-react';
+import { Plus, Pencil, Trash2, MapPin, Mail, Building2, CheckCircle, ChevronRight, Banknote, Send } from 'lucide-react';
 import FranchiseeForm from '@/components/FranchiseeForm';
 import { getBrandLogo } from '@/lib/logos';
 
@@ -79,13 +79,13 @@ function FranchiseesPageContent() {
     fetchFranchisees();
   };
 
-  const setupBacs = async (franchiseeId: string) => {
+  const setupBacs = async (franchiseeId: string, isReminder = false) => {
     setSettingUpBacsId(franchiseeId);
     try {
       const res = await fetch('/api/setup-bacs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ franchiseeId }),
+        body: JSON.stringify({ franchiseeId, reminder: isReminder }),
         credentials: 'include',
       });
       const data = await res.json().catch(() => ({}));
@@ -275,19 +275,35 @@ function FranchiseesPageContent() {
                     BACS set up
                   </span>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setupBacs(f.id)}
-                    disabled={settingUpBacsId === f.id}
-                    className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-                  >
-                    {settingUpBacsId === f.id ? (
-                      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    ) : (
-                      <Building2 className="h-3.5 w-3.5" />
-                    )}
-                    Set up BACS
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setupBacs(f.id)}
+                      disabled={settingUpBacsId === f.id}
+                      className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+                    >
+                      {settingUpBacsId === f.id ? (
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                      ) : (
+                        <Building2 className="h-3.5 w-3.5" />
+                      )}
+                      Set up BACS
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setupBacs(f.id, true)}
+                      disabled={settingUpBacsId === f.id}
+                      title="Send a reminder that BACS setup is outstanding (missed payment)"
+                      className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
+                    >
+                      {settingUpBacsId === f.id ? (
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
+                      Resend reminder
+                    </button>
+                  </>
                 )}
               </div>
 
