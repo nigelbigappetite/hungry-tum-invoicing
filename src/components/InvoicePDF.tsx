@@ -140,8 +140,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff7ed',
     borderRadius: 6,
     marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#fed7aa',
   },
   feeLabel: {
     width: '50%',
@@ -229,6 +227,30 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const showLogo = Boolean(logoPath?.trim());
   const directDebitFriday = bacsCollectionDate?.trim() || (invoice.created_at ? formatRecommendedBacsDateFromInvoiceDate(invoice.created_at) : '');
   const aggregatorReports = (reports || []).filter((r) => r && AGGREGATOR_PLATFORMS.includes(r.platform as typeof AGGREGATOR_PLATFORMS[number]));
+  const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed' && aggregatorReports.length === 0;
+  const isMaidstoneSite = ((franchisee.location || '').toLowerCase().includes('maidstone') || (franchisee.name || '').toLowerCase().includes('maidstone'));
+  const periodLabel = `${formatDateStr(invoice.week_start_date)} - ${formatDateStr(invoice.week_end_date)}`;
+  let maidstoneWaivedAmount: number | null = null;
+  let maidstoneBalanceAfter: number | null = null;
+  let maidstoneAmountToPay: number | null = null;
+  if (isMonthlyFixedInvoice && isMaidstoneSite) {
+    const startYear = 2025;
+    const startMonthIndex = 5; // June
+    const initialDebt = 6500;
+    const monthlyFee = Number(franchisee.monthly_fee ?? invoice.fee_amount ?? 0);
+    const periodStartDate = new Date(`${invoice.week_start_date}T00:00:00`);
+    if (!isNaN(periodStartDate.getTime()) && monthlyFee > 0) {
+      const monthsElapsed = (periodStartDate.getFullYear() - startYear) * 12 + (periodStartDate.getMonth() - startMonthIndex);
+      const periodsApplied = Math.max(0, monthsElapsed + 1);
+      const waivedTotal = Math.min(initialDebt, periodsApplied * monthlyFee);
+      const balanceAfter = Math.max(0, Math.round((initialDebt - waivedTotal) * 100) / 100);
+      const balanceBefore = Math.max(0, Math.round((balanceAfter + monthlyFee) * 100) / 100);
+      maidstoneWaivedAmount = Math.min(monthlyFee, balanceBefore);
+      maidstoneBalanceAfter = balanceAfter;
+      maidstoneAmountToPay = Math.max(0, Math.round((Number(invoice.fee_amount ?? 0) - maidstoneWaivedAmount) * 100) / 100);
+    }
+  }
+  const noPaymentRequired = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && maidstoneAmountToPay <= 0;
   const hasSlerp = slerpReports.length > 0 && slerpPayoutDate;
   const slerpGross = slerpReports.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
   const slerpPct = franchisee.slerp_percentage != null ? Number(franchisee.slerp_percentage) : 0;
@@ -305,61 +327,125 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           </View>
         </View>
 
-        {/* Block 1: Aggregator platforms – per row: Brand/Platform, Gross Revenue, Our fee (X%) */}
+        {/* Block 1: Standard weekly aggregator fee table or monthly fixed-fee line item */}
         <View style={styles.table}>
-          <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
-            Franchise fee – aggregator sales
-          </Text>
-          <View style={styles.tableHeader}>
-            <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>
-              Brand / Platform
-            </Text>
-            <Text style={{ ...styles.tableHeaderText, ...styles.colAmount }}>
-              Gross Revenue
-            </Text>
-            <Text style={{ ...styles.tableHeaderText, ...styles.colFee }}>
-              Fee
-            </Text>
-          </View>
-
-          {aggregatorReports.map((report, idx) => {
-            const platform = (report?.platform as Platform) ?? 'deliveroo';
-            const gross = Number(report?.gross_revenue ?? 0);
-            const pct = getPlatformFeeRate(franchisee, platform);
-            const fee = Math.round(gross * (pct / 100) * 100) / 100;
-            return (
-              <View key={report?.id ?? `report-${idx}`} style={styles.tableRow}>
-                <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
-                  {report?.brand?.trim()
-                    ? `${report.brand} – ${PLATFORM_LABELS[platform]}`
-                    : PLATFORM_LABELS[platform]}
+          {isMonthlyFixedInvoice ? (
+            <>
+              <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
+                Monthly franchise fee
+              </Text>
+              <View style={styles.tableHeader}>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>
+                  Description
                 </Text>
-                <Text style={{ ...styles.infoText, ...styles.colAmount, fontWeight: 600 }}>
-                  {formatGBP(gross)}
+                <Text style={{ ...styles.tableHeaderText, ...styles.colAmount }}>
+                  Period
                 </Text>
-                <Text style={{ ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c' }}>
-                  {pct}% · {formatGBP(fee)}
+                <Text style={{ ...styles.tableHeaderText, ...styles.colFee }}>
+                  Amount
                 </Text>
               </View>
-            );
-          })}
+              <View style={styles.tableRow}>
+                <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
+                  {`${franchisee.name} monthly franchise fee`}
+                </Text>
+                <Text style={{ ...styles.infoText, ...styles.colAmount }}>
+                  {periodLabel}
+                </Text>
+                <Text style={{ ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c' }}>
+                  {formatGBP(invoice.fee_amount)}
+                </Text>
+              </View>
+              {maidstoneWaivedAmount != null && maidstoneBalanceAfter != null && (
+                <View style={{ marginTop: 6, padding: 8, backgroundColor: '#fff7ed', borderRadius: 4 }}>
+                  <Text style={{ ...styles.footerText, color: '#9a3412' }}>
+                    Fee waived toward arrears: {formatGBP(maidstoneWaivedAmount)}. Arrears balance after this month: {formatGBP(maidstoneBalanceAfter)}.
+                  </Text>
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
+                Franchise fee – aggregator sales
+              </Text>
+              <View style={styles.tableHeader}>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>
+                  Brand / Platform
+                </Text>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colAmount }}>
+                  Gross Revenue
+                </Text>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colFee }}>
+                  Fee
+                </Text>
+              </View>
 
-          <View style={styles.totalRow}>
-            <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Total Gross Revenue</Text>
-            <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
-              {formatGBP(aggregatorReports.reduce((sum, r) => sum + Number(r?.gross_revenue ?? 0), 0))}
-            </Text>
-            <View style={styles.colFee} />
-          </View>
+              {aggregatorReports.map((report, idx) => {
+                const platform = (report?.platform as Platform) ?? 'deliveroo';
+                const gross = Number(report?.gross_revenue ?? 0);
+                const pct = getPlatformFeeRate(franchisee, platform);
+                const fee = Math.round(gross * (pct / 100) * 100) / 100;
+                return (
+                  <View key={report?.id ?? `report-${idx}`} style={styles.tableRow}>
+                    <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
+                      {report?.brand?.trim()
+                        ? `${report.brand} – ${PLATFORM_LABELS[platform]}`
+                        : PLATFORM_LABELS[platform]}
+                    </Text>
+                    <Text style={{ ...styles.infoText, ...styles.colAmount, fontWeight: 600 }}>
+                      {formatGBP(gross)}
+                    </Text>
+                    <Text style={{ ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c' }}>
+                      {pct}% · {formatGBP(fee)}
+                    </Text>
+                  </View>
+                );
+              })}
+
+              <View style={styles.totalRow}>
+                <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Total Gross Revenue</Text>
+                <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
+                  {formatGBP(aggregatorReports.reduce((sum, r) => sum + Number(r?.gross_revenue ?? 0), 0))}
+                </Text>
+                <View style={styles.colFee} />
+              </View>
+            </>
+          )}
 
           <View style={styles.feeRow}>
-            <Text style={styles.feeLabel}>
-              {payThem ? 'Amount due (invoice total)' : `Total franchise fee (${invoice.fee_percentage}%)`}
+            <Text
+              style={
+                isMonthlyFixedInvoice
+                  ? { ...styles.infoText, ...styles.colPlatform, fontWeight: 600, color: '#ea580c' }
+                  : styles.feeLabel
+              }
+            >
+              {payThem
+                ? 'Amount due (invoice total)'
+                : isMonthlyFixedInvoice
+                  ? 'Total monthly franchise fee'
+                  : `Total franchise fee (${invoice.fee_percentage}%)`}
             </Text>
-            <Text style={styles.feeAmount}>
+            <Text
+              style={
+                isMonthlyFixedInvoice
+                  ? { ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c', textAlign: 'right' }
+                  : styles.feeAmount
+              }
+            >
               {formatGBP(invoice.fee_amount)}
             </Text>
           </View>
+          {isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && (
+            <View style={{ ...styles.totalRow, marginTop: 8 }}>
+              <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Amount to pay</Text>
+              <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
+                {formatGBP(maidstoneAmountToPay)}
+              </Text>
+              <View style={styles.colFee} />
+            </View>
+          )}
         </View>
 
         {/* Block 2: Wing Shack Direct (Slerp) – paid to them, reference only */}
@@ -406,9 +492,13 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           ) : (
             <>
               <Text style={styles.footerTitle}>Direct Debit</Text>
-              <Text style={styles.footerText}>
-                The direct debit payment will take place on or around the following Friday: {directDebitFriday}.
-              </Text>
+              {noPaymentRequired ? (
+                <Text style={styles.footerText}>No payment is required.</Text>
+              ) : (
+                <Text style={styles.footerText}>
+                  The direct debit payment will take place on or around the following Friday: {directDebitFriday}.
+                </Text>
+              )}
               <Text style={styles.footerText}>
                 Reference: {invoice.invoice_number}
               </Text>
@@ -418,7 +508,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
 
         {/* Page footer */}
         <Text style={styles.pageFooter}>
-          Hungry Tum Ltd &bull; Franchise Invoicing System
+          Powered by Hungry Tum OS
         </Text>
       </Page>
     </Document>

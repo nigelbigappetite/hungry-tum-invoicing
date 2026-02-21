@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, Fragment } from 'react';
+import { useEffect, useState, useCallback, Fragment, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
@@ -108,6 +108,18 @@ export default function FranchiseeDetailPage() {
   const [saving, setSaving] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [monthlyInvoiceSaving, setMonthlyInvoiceSaving] = useState(false);
+  const [monthlyInvoiceMessage, setMonthlyInvoiceMessage] = useState('');
+  const [monthlyInvoiceError, setMonthlyInvoiceError] = useState('');
+  const [backfillStartMonth, setBackfillStartMonth] = useState(() => {
+    const now = new Date();
+    const lastFullMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const thisYearJune = new Date(now.getFullYear(), 5, 1);
+    const year = thisYearJune <= lastFullMonth ? now.getFullYear() : now.getFullYear() - 1;
+    return `${year}-06`;
+  });
+  const [backfillArrears, setBackfillArrears] = useState('6500');
+  const [backfillingInvoices, setBackfillingInvoices] = useState(false);
 
   // Invoices state (fetch all for metrics; filter in UI for table)
   const [invoices, setInvoices] = useState<InvoiceWithFranchisee[]>([]);
@@ -169,6 +181,7 @@ export default function FranchiseeDetailPage() {
       .from('invoices')
       .select('*, franchisees(name, location, email, bacs_payment_method_id)')
       .eq('franchisee_id', id)
+      .order('week_start_date', { ascending: false })
       .order('created_at', { ascending: false });
     if (!error && data) setInvoices(data as InvoiceWithFranchisee[]);
     setLoadingInvoices(false);
@@ -402,6 +415,56 @@ export default function FranchiseeDetailPage() {
       : null;
   const filteredInvoices =
     statusFilter === 'all' ? invoices : invoices.filter((i) => i.status === statusFilter);
+  const isMonthlyFixedSite = franchisee?.payment_model === 'monthly_fixed';
+  const isMaidstoneSite = useMemo(() => {
+    if (!franchisee) return false;
+    const location = (franchisee.location || '').toLowerCase();
+    const name = (franchisee.name || '').toLowerCase();
+    return location.includes('maidstone') || name.includes('maidstone');
+  }, [franchisee]);
+  const formatMonthLabel = (dateStr: string) => {
+    const d = parseISO(dateStr);
+    return isNaN(d.getTime()) ? dateStr : format(d, 'MMM yyyy');
+  };
+  const formatInvoicePeriodLabel = (invoice: Pick<Invoice, 'week_start_date' | 'week_end_date'>) =>
+    isMonthlyFixedSite ? formatMonthLabel(invoice.week_start_date) : formatWeekRange(invoice.week_start_date, invoice.week_end_date);
+  const maidstoneTrackerStartMonth = '2025-06';
+  const maidstoneTrackerInitialArrears = 6500;
+  const invoiceDebtSnapshots = useMemo(() => {
+    if (!isMonthlyFixedSite || !isMaidstoneSite) return {} as Record<string, { waivedAmount: number; balanceAfter: number }>;
+    const monthlyFee = Number(franchisee?.monthly_fee ?? 0);
+    if (!Number.isFinite(monthlyFee) || monthlyFee <= 0) return {} as Record<string, { waivedAmount: number; balanceAfter: number }>;
+
+    const start = parseISO(`${maidstoneTrackerStartMonth}-01`);
+    if (isNaN(start.getTime())) return {} as Record<string, { waivedAmount: number; balanceAfter: number }>;
+    let remaining = Math.max(0, Math.round(maidstoneTrackerInitialArrears * 100) / 100);
+    const map: Record<string, { waivedAmount: number; balanceAfter: number }> = {};
+    const monthlyInvoicesAsc = [...invoices]
+      .filter((inv) => parseISO(inv.week_start_date) >= start)
+      .sort((a, b) => a.week_start_date.localeCompare(b.week_start_date));
+    for (const inv of monthlyInvoicesAsc) {
+      const waivedAmount = Math.min(monthlyFee, remaining);
+      const balanceAfter = Math.max(0, Math.round((remaining - waivedAmount) * 100) / 100);
+      map[inv.id] = {
+        waivedAmount: Math.round(waivedAmount * 100) / 100,
+        balanceAfter,
+      };
+      remaining = balanceAfter;
+    }
+    return map;
+  }, [isMonthlyFixedSite, isMaidstoneSite, franchisee?.monthly_fee, maidstoneTrackerStartMonth, maidstoneTrackerInitialArrears, invoices]);
+  const debtTracker = useMemo(() => {
+    if (!isMonthlyFixedSite || !isMaidstoneSite) return null;
+    const monthlyFee = Number(franchisee?.monthly_fee ?? 0);
+    if (!Number.isFinite(monthlyFee) || monthlyFee <= 0) return null;
+    const snapshots = Object.values(invoiceDebtSnapshots);
+    const amountLeft = snapshots.length > 0
+      ? snapshots[snapshots.length - 1].balanceAfter
+      : Math.max(0, Math.round(maidstoneTrackerInitialArrears * 100) / 100);
+    const monthsApplied = snapshots.filter((s) => s.waivedAmount > 0).length;
+    const paymentsRemaining = amountLeft <= 0 ? 0 : Math.ceil(amountLeft / monthlyFee);
+    return { amountLeft, monthsApplied, paymentsRemaining };
+  }, [isMonthlyFixedSite, isMaidstoneSite, franchisee?.monthly_fee, invoiceDebtSnapshots, maidstoneTrackerInitialArrears]);
 
   const handleSaveUpload = async () => {
     if (!id || !franchisee) return;
@@ -950,6 +1013,72 @@ export default function FranchiseeDetailPage() {
     }
   };
 
+  const generateMonthlyInvoice = async () => {
+    if (!id || franchisee?.payment_model !== 'monthly_fixed') return;
+    setMonthlyInvoiceSaving(true);
+    setMonthlyInvoiceMessage('');
+    setMonthlyInvoiceError('');
+    try {
+      const response = await fetch('/api/create-monthly-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ franchiseeId: id, invoiceMonth: backfillStartMonth }),
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setMonthlyInvoiceError(data.error || 'Failed to generate monthly invoice');
+        return;
+      }
+      setMonthlyInvoiceMessage(data.message || 'Monthly invoice generated.');
+      fetchInvoices();
+    } catch {
+      setMonthlyInvoiceError('Failed to generate monthly invoice');
+    } finally {
+      setMonthlyInvoiceSaving(false);
+    }
+  };
+
+  const backfillMonthlyInvoices = async () => {
+    if (!id || franchisee?.payment_model !== 'monthly_fixed') return;
+    const arrearsValue = parseFloat(backfillArrears);
+    if (isNaN(arrearsValue) || arrearsValue < 0) {
+      setMonthlyInvoiceError('Please enter a valid arrears amount.');
+      return;
+    }
+    if (!backfillStartMonth) {
+      setMonthlyInvoiceError('Please select a start month.');
+      return;
+    }
+    setBackfillingInvoices(true);
+    setMonthlyInvoiceError('');
+    setMonthlyInvoiceMessage('');
+    try {
+      const response = await fetch('/api/backfill-monthly-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          franchiseeId: id,
+          startMonth: backfillStartMonth,
+          initialArrears: arrearsValue,
+        }),
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setMonthlyInvoiceError(data.error || 'Failed to backfill monthly invoices');
+        return;
+      }
+      const adjustedNote = data.adjustedStartMonth ? ` Start month auto-adjusted to ${data.adjustedStartMonth}.` : '';
+      setMonthlyInvoiceMessage(`${data.message || 'Backfill complete.'}${adjustedNote} Remaining arrears: ${formatCurrency(Number(data.remainingArrears ?? 0))}.`);
+      fetchInvoices();
+    } catch {
+      setMonthlyInvoiceError('Failed to backfill monthly invoices');
+    } finally {
+      setBackfillingInvoices(false);
+    }
+  };
+
   if (!id) {
     return (
       <div className="py-12 text-center text-slate-500">
@@ -1128,9 +1257,18 @@ export default function FranchiseeDetailPage() {
         <div className="rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400 dark:text-neutral-400">Oldest unpaid invoice</p>
           <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-neutral-100">
-            {loadingInvoices ? '—' : oldestUnpaid ? `Week ending ${formatDate(oldestUnpaid)}` : 'None'}
+            {loadingInvoices ? '—' : oldestUnpaid ? (isMonthlyFixedSite ? formatMonthLabel(oldestUnpaid) : `Week ending ${formatDate(oldestUnpaid)}`) : 'None'}
           </p>
         </div>
+        {debtTracker && (
+          <div className="rounded-xl border border-orange-200 dark:border-orange-800 bg-orange-50/40 dark:bg-orange-900/10 p-4 shadow-sm">
+            <p className="text-xs font-medium uppercase tracking-wider text-orange-700 dark:text-orange-300">Maidstone debt tracker</p>
+            <p className="mt-1 text-xl font-bold text-orange-800 dark:text-orange-200">{formatCurrency(debtTracker.amountLeft)} left</p>
+            <p className="mt-1 text-xs text-orange-700 dark:text-orange-300">
+              {debtTracker.monthsApplied} waived {debtTracker.monthsApplied === 1 ? 'month' : 'months'} applied · {debtTracker.paymentsRemaining} payments remaining
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Revenue by platform + % split */}
@@ -1467,19 +1605,70 @@ export default function FranchiseeDetailPage() {
 
       {activeTab === 'invoices' && (
         <div>
+          {monthlyInvoiceMessage && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-800">
+              <CheckCircle className="h-4 w-4 flex-shrink-0" />
+              {monthlyInvoiceMessage}
+            </div>
+          )}
+          {monthlyInvoiceError && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              {monthlyInvoiceError}
+            </div>
+          )}
           <div className="mb-4 flex items-center justify-between">
             <p className="text-sm text-slate-500 dark:text-neutral-400">Invoices for this franchisee</p>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as InvoiceStatus | 'all')}
-              className="rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              <option value="all">All statuses</option>
-              <option value="draft">Draft</option>
-              <option value="sent">Sent</option>
-              <option value="processing">Processing</option>
-              <option value="paid">Paid</option>
-            </select>
+            <div className="flex items-center gap-2">
+              {franchisee.payment_model === 'monthly_fixed' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={generateMonthlyInvoice}
+                    disabled={monthlyInvoiceSaving || backfillingInvoices}
+                    className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+                  >
+                    {monthlyInvoiceSaving ? 'Generating...' : 'Generate monthly invoice'}
+                  </button>
+                  <input
+                    type="month"
+                    value={backfillStartMonth}
+                    onChange={(e) => setBackfillStartMonth(e.target.value)}
+                    className="rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 px-2 py-2 text-sm"
+                    title="Invoice month (and backfill start month)"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={backfillArrears}
+                    onChange={(e) => setBackfillArrears(e.target.value)}
+                    className="w-28 rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 px-2 py-2 text-sm"
+                    title="Starting arrears amount"
+                  />
+                  <button
+                    type="button"
+                    onClick={backfillMonthlyInvoices}
+                    disabled={backfillingInvoices || monthlyInvoiceSaving}
+                    className="rounded-lg border border-primary px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                    title="Create backdated monthly invoices and waive fee against arrears"
+                  >
+                    {backfillingInvoices ? 'Backfilling...' : 'Backfill waived invoices'}
+                  </button>
+                </>
+              )}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as InvoiceStatus | 'all')}
+                className="rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="all">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="sent">Sent</option>
+                <option value="processing">Processing</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
           </div>
 
           {loadingInvoices ? (
@@ -1496,7 +1685,9 @@ export default function FranchiseeDetailPage() {
               </p>
               <p className="mt-1 text-sm text-slate-400 dark:text-neutral-400">
                 {invoices.length === 0
-                  ? 'Upload weekly reports in the Upload reports tab to create an invoice.'
+                  ? franchisee.payment_model === 'monthly_fixed'
+                    ? 'Use "Generate monthly invoice" to create an invoice for the last full month.'
+                    : 'Upload weekly reports in the Upload reports tab to create an invoice.'
                   : 'Try a different status filter.'}
               </p>
             </div>
@@ -1512,7 +1703,7 @@ export default function FranchiseeDetailPage() {
                       Brand
                     </th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
-                      Week
+                      {isMonthlyFixedSite ? 'Month' : 'Week'}
                     </th>
                     <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
                       Gross revenue
@@ -1548,7 +1739,9 @@ export default function FranchiseeDetailPage() {
                                 ? invoice.brands
                                 : invoice.brand?.trim()
                                   ? [invoice.brand.trim()]
-                                  : []) as string[];
+                                  : Array.isArray(franchisee.brands) && franchisee.brands.length > 0
+                                    ? franchisee.brands
+                                    : []) as string[];
                             if (brandsList.length === 0)
                               return <span className="text-sm text-slate-500 dark:text-neutral-400">—</span>;
                             return (
@@ -1575,7 +1768,7 @@ export default function FranchiseeDetailPage() {
                         </td>
                         <td className="px-5 py-3.5">
                           <span className="text-sm text-slate-500 dark:text-neutral-400">
-                            {formatWeekRange(invoice.week_start_date, invoice.week_end_date)}
+                            {formatInvoicePeriodLabel(invoice)}
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-right">
@@ -1751,7 +1944,9 @@ export default function FranchiseeDetailPage() {
                                   </button>
                                 </p>
                               )}
-                              <h4 className="mb-3 text-sm font-semibold text-slate-700 dark:text-neutral-200">Revenue breakdown</h4>
+                              <h4 className="mb-3 text-sm font-semibold text-slate-700 dark:text-neutral-200">
+                                {isMonthlyFixedSite ? 'Invoice summary' : 'Revenue breakdown'}
+                              </h4>
                               {reports[invoice.id] ? (
                                 <div className="space-y-2">
                                   {(() => {
@@ -1775,9 +1970,14 @@ export default function FranchiseeDetailPage() {
                                     const rows = Array.from(byKey.values()).sort((a, b) => a.platform.localeCompare(b.platform));
                                     const breakdownTotal = rows.reduce((s, r) => s + r.gross_revenue, 0);
                                     const invoiceTotal = Number(invoice.total_gross_revenue) || 0;
-                                    const mismatch = Math.abs(breakdownTotal - invoiceTotal) > 0.02;
+                                    const mismatch = !isMonthlyFixedSite && Math.abs(breakdownTotal - invoiceTotal) > 0.02;
                                     return (
                                       <>
+                                        {isMaidstoneSite && invoiceDebtSnapshots[invoice.id] && (
+                                          <p className="mb-3 rounded-md bg-orange-50 dark:bg-orange-900/20 px-3 py-2 text-xs text-orange-800 dark:text-orange-200">
+                                            Fee waived toward arrears this month: {formatCurrency(invoiceDebtSnapshots[invoice.id].waivedAmount)}. Balance after this month: {formatCurrency(invoiceDebtSnapshots[invoice.id].balanceAfter)}.
+                                          </p>
+                                        )}
                                         {mismatch && (
                                           <p className="mb-3 rounded-md bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
                                             Breakdown total ({formatCurrency(breakdownTotal)}) doesn’t match invoice total. Upload any missing platform reports for week {formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Upload reports tab (same week, correct brand).
@@ -1796,7 +1996,11 @@ export default function FranchiseeDetailPage() {
                                             </span>
                                           </div>
                                         )) : (
-                                          <p className="text-sm text-slate-500 dark:text-neutral-400">No reports found for this invoice’s week. Upload platform reports for week {formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Upload reports tab.</p>
+                                          <p className="text-sm text-slate-500 dark:text-neutral-400">
+                                            {isMonthlyFixedSite
+                                              ? 'Monthly fixed invoice (no uploaded platform reports required).'
+                                              : `No reports found for this invoice’s week. Upload platform reports for week ${formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Upload reports tab.`}
+                                          </p>
                                         )}
                                         <div className="mt-2 flex items-center justify-between border-t border-slate-200 dark:border-neutral-600 px-4 pt-3">
                                           <span className="text-sm font-semibold text-slate-700 dark:text-neutral-200">Total</span>
@@ -1806,7 +2010,7 @@ export default function FranchiseeDetailPage() {
                                         </div>
                                         <div className="flex items-center justify-between px-4">
                                           <span className="text-sm font-semibold text-primary-dark dark:text-primary-light">
-                                            Fee ({invoice.fee_percentage}%)
+                                            {isMonthlyFixedSite ? 'Fee (monthly fixed)' : `Fee (${invoice.fee_percentage}%)`}
                                           </span>
                                           <span className="text-sm font-bold text-primary-dark dark:text-primary-light">
                                             {formatCurrency(invoice.fee_amount)}
@@ -1818,6 +2022,7 @@ export default function FranchiseeDetailPage() {
                                           </p>
                                         )}
                                         {(() => {
+                                          if (isMonthlyFixedSite) return null;
                                           const missingAggregator = (['deliveroo', 'ubereats', 'justeat'] as const).filter((p) => !rows.some((r) => r.platform === p));
                                           if (missingAggregator.length === 0) return null;
                                           const platformValue: AggregatorPlatform = missingAggregator.includes(manualAddPlatform) ? manualAddPlatform : missingAggregator[0];

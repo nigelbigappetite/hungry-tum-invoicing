@@ -73,11 +73,17 @@ function FranchiseesPageContent() {
   const handleFormClose = () => {
     setShowForm(false);
     setEditingFranchisee(null);
+    if (searchParams.get('edit')) {
+      window.history.replaceState({}, '', '/franchisees');
+    }
   };
 
   const handleFormSaved = () => {
     setShowForm(false);
     setEditingFranchisee(null);
+    if (searchParams.get('edit')) {
+      window.history.replaceState({}, '', '/franchisees');
+    }
     fetchFranchisees();
   };
 
