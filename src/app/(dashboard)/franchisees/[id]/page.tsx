@@ -113,10 +113,9 @@ export default function FranchiseeDetailPage() {
   const [monthlyInvoiceError, setMonthlyInvoiceError] = useState('');
   const [backfillStartMonth, setBackfillStartMonth] = useState(() => {
     const now = new Date();
-    const lastFullMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const thisYearJune = new Date(now.getFullYear(), 5, 1);
-    const year = thisYearJune <= lastFullMonth ? now.getFullYear() : now.getFullYear() - 1;
-    return `${year}-06`;
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
   });
   const [backfillArrears, setBackfillArrears] = useState('6500');
   const [backfillingInvoices, setBackfillingInvoices] = useState(false);
