@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
@@ -18,7 +18,9 @@ function FranchiseesPageContent() {
   const [showForm, setShowForm] = useState(false);
   const [editingFranchisee, setEditingFranchisee] = useState<Franchisee | null>(null);
   const [settingUpBacsId, setSettingUpBacsId] = useState<string | null>(null);
+  const [syncingBacs, setSyncingBacs] = useState(false);
   const [brandFilter, setBrandFilter] = useState<string>('all');
+  const autoSyncAttemptedRef = useRef(false);
 
   const fetchFranchisees = useCallback(async () => {
     setLoading(true);
@@ -106,6 +108,48 @@ function FranchiseesPageContent() {
     }
   };
 
+  const syncBacsStatus = useCallback(
+    async (silent = false) => {
+      if (syncingBacs) return;
+      setSyncingBacs(true);
+      try {
+        const res = await fetch('/api/sync-bacs-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+          credentials: 'include',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (!silent) alert(data.error || 'Failed to sync BACS status');
+          return;
+        }
+        if (data.updated > 0) {
+          await fetchFranchisees();
+        }
+        if (!silent) {
+          alert(data.message || 'BACS status sync complete.');
+        }
+      } catch {
+        if (!silent) alert('Failed to sync BACS status');
+      } finally {
+        setSyncingBacs(false);
+      }
+    },
+    [fetchFranchisees, syncingBacs]
+  );
+
+  useEffect(() => {
+    if (loading) return;
+    if (autoSyncAttemptedRef.current) return;
+    const hasPendingBacsStatus = franchisees.some(
+      (f) => !!f.stripe_customer_id && !f.bacs_payment_method_id
+    );
+    if (!hasPendingBacsStatus) return;
+    autoSyncAttemptedRef.current = true;
+    syncBacsStatus(true);
+  }, [franchisees, loading, syncBacsStatus]);
+
   return (
     <div>
       <div className="mb-8 flex items-center justify-between">
@@ -138,19 +182,34 @@ function FranchiseesPageContent() {
       ) : (
         <>
           {BRAND_OPTIONS.length > 0 && (
-            <div className="mb-4 flex items-center gap-2">
-              <span className="text-sm text-slate-500 dark:text-neutral-400">Brand:</span>
-              <select
-                value={brandFilter}
-                onChange={(e) => setBrandFilter(e.target.value)}
-                className="rounded-lg border border-slate-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-slate-500 dark:text-neutral-400">Brand:</span>
+                <select
+                  value={brandFilter}
+                  onChange={(e) => setBrandFilter(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="all">All brands</option>
+                  {BRAND_OPTIONS.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                  <option value="none">No brands</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => syncBacsStatus()}
+                disabled={syncingBacs}
+                className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
               >
-                <option value="all">All brands</option>
-                {BRAND_OPTIONS.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-                <option value="none">No brands</option>
-              </select>
+                {syncingBacs ? (
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                ) : (
+                  <CheckCircle className="h-3.5 w-3.5" />
+                )}
+                Sync BACS status
+              </button>
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
