@@ -85,6 +85,7 @@ export async function POST(request: NextRequest) {
       month: string;
       waivedAmount: number;
       feeAmount: number;
+      balanceAfter: number;
       created: boolean;
       invoiceId?: string;
     }> = [];
