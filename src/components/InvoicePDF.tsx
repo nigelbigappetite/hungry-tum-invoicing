@@ -227,7 +227,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const showLogo = Boolean(logoPath?.trim());
   const directDebitFriday = bacsCollectionDate?.trim() || (invoice.created_at ? formatRecommendedBacsDateFromInvoiceDate(invoice.created_at) : '');
   const aggregatorReports = (reports || []).filter((r) => r && AGGREGATOR_PLATFORMS.includes(r.platform as typeof AGGREGATOR_PLATFORMS[number]));
-  const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed' && aggregatorReports.length === 0;
+  const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed';
   const isMaidstoneSite = ((franchisee.location || '').toLowerCase().includes('maidstone') || (franchisee.name || '').toLowerCase().includes('maidstone'));
   const periodLabel = `${formatDateStr(invoice.week_start_date)} - ${formatDateStr(invoice.week_end_date)}`;
   let maidstoneWaivedAmount: number | null = null;
@@ -251,6 +251,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
     }
   }
   const noPaymentRequired = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && maidstoneAmountToPay <= 0;
+  const showMaidstoneWaiverFooter = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneWaivedAmount != null && maidstoneAmountToPay != null;
   const hasSlerp = slerpReports.length > 0 && slerpPayoutDate;
   const slerpGross = slerpReports.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
   const slerpPct = franchisee.slerp_percentage != null ? Number(franchisee.slerp_percentage) : 0;
@@ -489,6 +490,27 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 Reference: {invoice.invoice_number}
               </Text>
             </>
+          ) : showMaidstoneWaiverFooter ? (
+            <>
+              <Text style={styles.footerTitle}>Payment Summary</Text>
+              <Text style={styles.footerText}>
+                This month&apos;s franchise fee of {formatGBP(invoice.fee_amount)} has been waived for {franchisee.name}.
+              </Text>
+              <Text style={styles.footerText}>
+                Waiver applied: {formatGBP(maidstoneWaivedAmount)}. Amount due: {formatGBP(maidstoneAmountToPay)}.
+              </Text>
+              {maidstoneBalanceAfter != null && (
+                <Text style={styles.footerText}>
+                  Remaining arrears balance after this invoice: {formatGBP(maidstoneBalanceAfter)}.
+                </Text>
+              )}
+              <Text style={styles.footerText}>
+                No direct debit will be collected for this invoice.
+              </Text>
+              <Text style={styles.footerText}>
+                Reference: {invoice.invoice_number}
+              </Text>
+            </>
           ) : (
             <>
               <Text style={styles.footerTitle}>Direct Debit</Text>
@@ -496,7 +518,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 <Text style={styles.footerText}>No payment is required.</Text>
               ) : (
                 <Text style={styles.footerText}>
-                  The direct debit payment will take place on or around the following Friday: {directDebitFriday}.
+                  The direct debit payment will take place on or around 5-7 working days from now.
                 </Text>
               )}
               <Text style={styles.footerText}>
