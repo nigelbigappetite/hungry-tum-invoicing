@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { sumRevenueRowsForExtendedInvoice } from '@/lib/monthly-invoice-revenue';
 
 function formatDateOnly(date: Date): string {
   const year = date.getFullYear();
@@ -94,6 +95,21 @@ export async function POST(request: NextRequest) {
       const periodStart = formatDateOnly(new Date(cursor.getFullYear(), cursor.getMonth(), 1));
       const periodEnd = formatDateOnly(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0));
       const monthLabel = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+      const { data: revenueRows, error: revenueError } = await supabase
+        .from('weekly_reports')
+        .select('gross_revenue, week_end_date')
+        .eq('franchisee_id', franchiseeId)
+        .gte('week_end_date', periodStart)
+        .lte('week_end_date', periodEnd);
+
+      if (revenueError) {
+        return NextResponse.json({ error: revenueError.message || `Failed loading revenue for ${monthLabel}` }, { status: 500 });
+      }
+
+      const totalGrossRevenue = sumRevenueRowsForExtendedInvoice(revenueRows || [], {
+        week_start_date: periodStart,
+        week_end_date: periodEnd,
+      });
 
       const { data: existingInvoice } = await supabase
         .from('invoices')
@@ -110,6 +126,19 @@ export async function POST(request: NextRequest) {
       const balanceAfter = Math.max(0, Math.round((remainingArrears - waiveAmount) * 100) / 100);
 
       if (existingInvoice) {
+        const { error: updateError } = await supabase
+          .from('invoices')
+          .update({
+            total_gross_revenue: totalGrossRevenue,
+            fee_percentage: 0,
+            fee_amount: feeAmount,
+          })
+          .eq('id', existingInvoice.id);
+
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message || `Failed updating invoice for ${monthLabel}` }, { status: 500 });
+        }
+
         skippedCount += 1;
         monthsProcessed.push({
           month: monthLabel,
@@ -126,7 +155,7 @@ export async function POST(request: NextRequest) {
             franchisee_id: franchiseeId,
             week_start_date: periodStart,
             week_end_date: periodEnd,
-            total_gross_revenue: 0,
+            total_gross_revenue: totalGrossRevenue,
             fee_percentage: 0,
             fee_amount: feeAmount,
             status: 'draft',

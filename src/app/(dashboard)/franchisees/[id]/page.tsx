@@ -26,6 +26,11 @@ import {
   getWeekRangeFromDate,
   cn,
 } from '@/lib/utils';
+import {
+  isExtendedInvoiceRange,
+  reportFallsInExtendedInvoiceRange,
+  sumRevenueRowsForExtendedInvoice,
+} from '@/lib/monthly-invoice-revenue';
 import { getPlatformLogo, getBrandLogo } from '@/lib/logos';
 import { startOfWeek, endOfWeek, format, addDays, parseISO } from 'date-fns';
 import FileUpload from '@/components/FileUpload';
@@ -70,6 +75,11 @@ interface InvoiceWithFranchisee extends Invoice {
     bacs_payment_method_id: string | null;
   } | null;
 }
+
+type RevenueSyncRow = {
+  gross_revenue: number | null;
+  week_end_date: string;
+};
 
 export default function FranchiseeDetailPage() {
   const params = useParams();
@@ -176,13 +186,47 @@ export default function FranchiseeDetailPage() {
   const fetchInvoices = useCallback(async () => {
     if (!id) return;
     setLoadingInvoices(true);
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('*, franchisees(name, location, email, bacs_payment_method_id)')
-      .eq('franchisee_id', id)
-      .order('week_start_date', { ascending: false })
-      .order('created_at', { ascending: false });
-    if (!error && data) setInvoices(data as InvoiceWithFranchisee[]);
+    const [{ data, error }, { data: revenueRows, error: revenueError }] = await Promise.all([
+      supabase
+        .from('invoices')
+        .select('*, franchisees(name, location, email, bacs_payment_method_id)')
+        .eq('franchisee_id', id)
+        .order('week_start_date', { ascending: false })
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('weekly_reports')
+        .select('gross_revenue, week_end_date')
+        .eq('franchisee_id', id),
+    ]);
+    if (!error && data) {
+      const rows = (revenueRows || []) as RevenueSyncRow[];
+      const correctedInvoices = (data as InvoiceWithFranchisee[]).map((invoice) => {
+        if (!isExtendedInvoiceRange(invoice.week_start_date, invoice.week_end_date)) return invoice;
+        const syncedGrossRevenue = sumRevenueRowsForExtendedInvoice(rows, invoice);
+        return Math.abs(syncedGrossRevenue - Number(invoice.total_gross_revenue || 0)) > 0.01
+          ? { ...invoice, total_gross_revenue: syncedGrossRevenue }
+          : invoice;
+      });
+      setInvoices(correctedInvoices);
+
+      if (!revenueError) {
+        const invoicesNeedingSync = correctedInvoices.filter(
+          (invoice, index) =>
+            isExtendedInvoiceRange(invoice.week_start_date, invoice.week_end_date) &&
+            Math.abs(Number(invoice.total_gross_revenue || 0) - Number((data as InvoiceWithFranchisee[])[index].total_gross_revenue || 0)) > 0.01
+        );
+        if (invoicesNeedingSync.length > 0) {
+          await Promise.all(
+            invoicesNeedingSync.map((invoice) =>
+              supabase
+                .from('invoices')
+                .update({ total_gross_revenue: invoice.total_gross_revenue })
+                .eq('id', invoice.id)
+            )
+          );
+        }
+      }
+    }
     setLoadingInvoices(false);
   }, [id, supabase]);
 
@@ -195,6 +239,7 @@ export default function FranchiseeDetailPage() {
       .eq('franchisee_id', id);
     const weekKeys = new Set<string>();
     const slerpWeekKeys = new Set<string>();
+    const extendedInvoiceRanges: Array<{ week_start_date: string; week_end_date: string }> = [];
     (invoiceWeeks || []).forEach(
       (r: {
         brand: string | null;
@@ -202,6 +247,13 @@ export default function FranchiseeDetailPage() {
         week_start_date: string;
         week_end_date: string;
       }) => {
+        if (isExtendedInvoiceRange(r.week_start_date, r.week_end_date)) {
+          extendedInvoiceRanges.push({
+            week_start_date: r.week_start_date,
+            week_end_date: r.week_end_date,
+          });
+          return;
+        }
         const brandsList =
           r.brands && r.brands.length > 0 ? r.brands : r.brand?.trim() ? [r.brand.trim()] : [];
         brandsList.forEach((brand) => {
@@ -236,7 +288,10 @@ export default function FranchiseeDetailPage() {
     (reportRows || []).forEach((row: { platform: string; gross_revenue: number; brand?: string | null; week_start_date: string; week_end_date: string }) => {
       const key = `${(row.brand ?? '').trim()}|${row.week_start_date}|${row.week_end_date}`;
       const isSlerp = normalizePlatform(row.platform) === 'slerp';
-      const matchesInvoice = isSlerp ? slerpWeekKeys.has(key) : weekKeys.has(key);
+      const matchesExtendedInvoice = extendedInvoiceRanges.some((invoice) =>
+        reportFallsInExtendedInvoiceRange(row.week_end_date, invoice)
+      );
+      const matchesInvoice = matchesExtendedInvoice || (isSlerp ? slerpWeekKeys.has(key) : weekKeys.has(key));
       if (!matchesInvoice) return;
       const platformKey = normalizePlatform(row.platform);
       if (platformKey) sums[platformKey] += Number(row.gross_revenue) || 0;
@@ -540,6 +595,9 @@ export default function FranchiseeDetailPage() {
           if (insertError) throw insertError;
         }
       }
+      const franchiseeBrands = Array.isArray(franchisee.brands) && franchisee.brands.length > 0
+        ? franchisee.brands
+        : null;
       const brandsInBatch = [
         ...new Set(
           rowsWithData.flatMap((r) => {
@@ -548,7 +606,7 @@ export default function FranchiseeDetailPage() {
             return r.brand.trim() ? [r.brand.trim()] : [];
           })
         ),
-      ].filter(Boolean);
+      ].filter(Boolean).filter((b) => !franchiseeBrands || franchiseeBrands.includes(b as string));
 
       // One combined Hungry Tum invoice per franchisee per week (all brands)
       const { data: allReports } = await supabase
@@ -765,13 +823,17 @@ export default function FranchiseeDetailPage() {
     invoiceBrand: string | null
   ) => {
     if (!id) return;
-    const { data } = await supabase
+    let query = supabase
       .from('weekly_reports')
       .select('*')
       .eq('franchisee_id', id)
-      .eq('week_start_date', weekStart)
-      .eq('week_end_date', weekEnd)
       .order('platform');
+    if (isExtendedInvoiceRange(weekStart, weekEnd)) {
+      query = query.gte('week_end_date', weekStart).lte('week_end_date', weekEnd);
+    } else {
+      query = query.eq('week_start_date', weekStart).eq('week_end_date', weekEnd);
+    }
+    const { data } = await query;
     const invoiceBrandTrimmed = (invoiceBrand ?? '').trim().toLowerCase();
     const filtered =
       data && invoiceBrandTrimmed

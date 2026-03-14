@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
 import { formatRecommendedBacsDateFromInvoiceDate, formatWeekRange, getSlerpPayoutDateForInvoiceWeek, getSlerpSalesPeriodEndForInvoiceWeek } from '@/lib/utils';
 import { createElement } from 'react';
+import { isExtendedInvoiceRange } from '@/lib/monthly-invoice-revenue';
 
 export async function POST(request: NextRequest) {
   try {
@@ -44,9 +45,16 @@ export async function POST(request: NextRequest) {
       .from('weekly_reports')
       .select('*')
       .eq('franchisee_id', invoice.franchisee_id)
-      .eq('week_start_date', invoice.week_start_date)
-      .eq('week_end_date', invoice.week_end_date)
       .in('platform', ['deliveroo', 'ubereats', 'justeat']);
+    if (isExtendedInvoiceRange(invoice.week_start_date, invoice.week_end_date)) {
+      reportsQuery = reportsQuery
+        .gte('week_end_date', invoice.week_start_date)
+        .lte('week_end_date', invoice.week_end_date);
+    } else {
+      reportsQuery = reportsQuery
+        .eq('week_start_date', invoice.week_start_date)
+        .eq('week_end_date', invoice.week_end_date);
+    }
     const isCombinedInvoice = invoice.brands && Array.isArray(invoice.brands) && invoice.brands.length > 0;
     if (!isCombinedInvoice && invoice.brand?.trim()) {
       reportsQuery = reportsQuery.eq('brand', invoice.brand.trim());
@@ -64,8 +72,14 @@ export async function POST(request: NextRequest) {
       .from('weekly_reports')
       .select('*')
       .eq('franchisee_id', invoice.franchisee_id)
-      .eq('platform', 'slerp')
-      .eq('week_end_date', slerpSalesPeriodEnd);
+      .eq('platform', 'slerp');
+    if (isExtendedInvoiceRange(invoice.week_start_date, invoice.week_end_date)) {
+      slerpQuery = slerpQuery
+        .gte('week_end_date', invoice.week_start_date)
+        .lte('week_end_date', invoice.week_end_date);
+    } else {
+      slerpQuery = slerpQuery.eq('week_end_date', slerpSalesPeriodEnd);
+    }
     if (!isCombinedInvoice && invoice.brand?.trim()) {
       slerpQuery = slerpQuery.eq('brand', invoice.brand.trim());
     }

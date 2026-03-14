@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { sumRevenueRowsForExtendedInvoice } from '@/lib/monthly-invoice-revenue';
 
 function formatDateOnly(date: Date): string {
   const year = date.getFullYear();
@@ -78,6 +79,22 @@ export async function POST(request: NextRequest) {
     }
     const { periodStart, periodEnd } = selectedRange ?? getLastFullMonthRange();
     const periodLabel = selectedRange?.label ?? 'last month';
+    const { data: revenueRows, error: revenueError } = await supabase
+      .from('weekly_reports')
+      .select('gross_revenue, week_end_date')
+      .eq('franchisee_id', franchiseeId)
+      .gte('week_end_date', periodStart)
+      .lte('week_end_date', periodEnd);
+
+    if (revenueError) {
+      return NextResponse.json({ error: revenueError.message || 'Failed to load revenue for invoice period' }, { status: 500 });
+    }
+
+    const totalGrossRevenue = sumRevenueRowsForExtendedInvoice(revenueRows || [], {
+      week_start_date: periodStart,
+      week_end_date: periodEnd,
+    });
+
     const { data: existingInvoice, error: existingError } = await supabase
       .from('invoices')
       .select('*')
@@ -93,10 +110,25 @@ export async function POST(request: NextRequest) {
     }
 
     if (existingInvoice) {
+      const { data: refreshedInvoice, error: refreshError } = await supabase
+        .from('invoices')
+        .update({
+          total_gross_revenue: totalGrossRevenue,
+          fee_percentage: 0,
+          fee_amount: Math.round(monthlyFee * 100) / 100,
+        })
+        .eq('id', existingInvoice.id)
+        .select('*')
+        .single();
+
+      if (refreshError || !refreshedInvoice) {
+        return NextResponse.json({ error: refreshError?.message || 'Failed to refresh existing invoice' }, { status: 500 });
+      }
+
       return NextResponse.json({
         success: true,
         created: false,
-        invoice: existingInvoice,
+        invoice: refreshedInvoice,
         message: `Invoice already exists for ${periodLabel} (status: ${existingInvoice.status}). Returned existing invoice.`,
       });
     }
@@ -108,7 +140,7 @@ export async function POST(request: NextRequest) {
         franchisee_id: franchiseeId,
         week_start_date: periodStart,
         week_end_date: periodEnd,
-        total_gross_revenue: 0,
+        total_gross_revenue: totalGrossRevenue,
         fee_percentage: 0,
         fee_amount: feeAmount,
         status: 'draft',
