@@ -11,6 +11,13 @@ export interface PDFParseResult {
   week_end_date?: string;
   /** When Deliveroo statement has multiple Hungry Tum brands (e.g. Bethnal Green), per-brand Total Order Value for invoice breakdown. Keys = Hungry Tum brand names (Wing Shack, SMSH BN, Eggs n Stuff). */
   deliveroo_brand_breakdown?: Record<string, number>;
+  /** Financial breakdown fields — populated for Deliveroo PDF. */
+  platform_commission?: number;
+  delivery_fee?: number;
+  restaurant_offers?: number;
+  adjustments?: number;
+  net_payout?: number;
+  order_count?: number;
 }
 
 /**
@@ -121,6 +128,22 @@ function sumHungryTumTotalOrderValueInText(
   return { sum, foundAny, brand_breakdown };
 }
 
+/** Extract Deliveroo financial breakdown from PDF text. */
+function extractDeliverooFinancials(text: string): Pick<PDFParseResult, 'platform_commission' | 'delivery_fee' | 'restaurant_offers' | 'adjustments' | 'net_payout' | 'order_count'> {
+  const parseAmount = (m: RegExpMatchArray | null) =>
+    m?.[1] ? parseFloat(m[1].replace(/,/g, '')) : undefined;
+
+  const net_payout = parseAmount(text.match(/Total\s+payable\s+to\s+[A-Za-z][^£\n]{0,60}£\s*([\d,]+\.?\d*)/i));
+  const platform_commission = parseAmount(text.match(/(?:Deliveroo\s+)?[Cc]ommission[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
+  const delivery_fee = parseAmount(text.match(/[Dd]elivery\s+(?:fee|charge)[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
+  const restaurant_offers = parseAmount(text.match(/(?:[Pp]romotion|[Oo]ffer|[Dd]iscount)[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
+  const adjustments = parseAmount(text.match(/[Aa]djustment[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
+  const orderCountMatch = text.match(/(\d+)\s+order/i);
+  const order_count = orderCountMatch ? parseInt(orderCountMatch[1]) : undefined;
+
+  return { platform_commission, delivery_fee, restaurant_offers, adjustments, net_payout, order_count };
+}
+
 /**
  * Deliveroo sends a Payment Statement PDF.
  * We must use "Total Order Value" only (total price of all menu items purchased by customers).
@@ -132,6 +155,7 @@ function sumHungryTumTotalOrderValueInText(
  */
 function extractDeliverooRevenue(text: string): PDFParseResult {
   const rawTextSnippet = text.substring(0, 2000);
+  const financials = extractDeliverooFinancials(text);
 
   // 1) First: sum Total Order Value for Hungry Tum brands anywhere in the document.
   // This runs on the full extracted text so we always prefer per-brand totals when present,
@@ -144,6 +168,7 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
       matched_pattern: 'Hungry Tum brands only (per-brand Total Order Value)',
       raw_text: rawTextSnippet,
       deliveroo_brand_breakdown: wholeDoc.brand_breakdown,
+      ...financials,
     };
   }
 
@@ -165,6 +190,7 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
         'SMSH BN': 0,
         'Wing Shack': rounded,
       },
+      ...financials,
     };
   }
   return {
@@ -172,6 +198,7 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
     confidence: 'low',
     matched_pattern: null,
     raw_text: rawTextSnippet,
+    ...financials,
   };
 }
 

@@ -7,6 +7,11 @@ export interface HTMLParseResult {
   matched_pattern: string | null;
   week_start_date?: string;
   week_end_date?: string;
+  /** Financial breakdown fields — populated for Just Eat HTML. */
+  platform_commission?: number;
+  restaurant_offers?: number;
+  net_payout?: number;
+  order_count?: number;
 }
 
 /**
@@ -67,6 +72,18 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
 
   const week = extractWeekFromHTMLText(text);
 
+  // Extract financial breakdown
+  const netPayoutMatch = text.match(/[Yy]ou\s+will\s+receive\s+from\s+Just\s+Eat\s*£([\d,]+\.?\d*)/i);
+  const orderCountMatch = text.match(/Number\s+of\s+orders\s+(\d+)/i);
+  const commissionMatch = text.match(/[Cc]ommission[^£\n]{0,60}£([\d,]+\.?\d*)/);
+  const offersMatch = text.match(/[Pp]romotion[^£\n]{0,60}£([\d,]+\.?\d*)/);
+  const financials = {
+    net_payout: netPayoutMatch ? parseFloat(netPayoutMatch[1].replace(/,/g, '')) : undefined,
+    order_count: orderCountMatch ? parseInt(orderCountMatch[1]) : undefined,
+    platform_commission: commissionMatch ? parseFloat(commissionMatch[1].replace(/,/g, '')) : undefined,
+    restaurant_offers: offersMatch ? parseFloat(offersMatch[1].replace(/,/g, '')) : undefined,
+  };
+
   // Primary: "Total sales" with £ amount — this is the gross
   const totalSalesMatch = text.match(
     /Total\s+sales\s*£([\d,]+\.?\d*)/i
@@ -79,6 +96,7 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
       gross_revenue: parseFloat(totalSalesMatch[1].replace(/,/g, '')),
       confidence: 'high',
       matched_pattern: 'Total sales',
+      ...financials,
     });
   }
 
@@ -91,6 +109,7 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
       gross_revenue: parseFloat(totalSalesPeriod[1].replace(/,/g, '')),
       confidence: 'high',
       matched_pattern: 'Total sales this period',
+      ...financials,
     });
   }
 
@@ -103,12 +122,11 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
       gross_revenue: parseFloat(grossOrderValue[1].replace(/,/g, '')),
       confidence: 'high',
       matched_pattern: 'Gross Order Value',
+      ...financials,
     });
   }
 
   // Fallback: try to sum the order totals from the orders table
-  // Look for the summary row at the bottom showing total card + total amounts
-  // Pattern: £0.00 £286.20 £286.20 (cash, card, total at bottom of orders table)
   const orderTotalRow = text.match(
     /£[\d,]+\.?\d*\s+£([\d,]+\.?\d*)\s+£([\d,]+\.?\d*)\s*$/m
   );
@@ -117,6 +135,7 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
       gross_revenue: parseFloat(orderTotalRow[2].replace(/,/g, '')),
       confidence: 'medium',
       matched_pattern: 'Orders table total',
+      ...financials,
     });
   }
 
@@ -129,6 +148,7 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
       gross_revenue: parseFloat(cardOrders[1].replace(/,/g, '')),
       confidence: 'medium',
       matched_pattern: 'Card orders total',
+      ...financials,
     });
   }
 
@@ -136,6 +156,7 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
     gross_revenue: 0,
     confidence: 'low',
     matched_pattern: null,
+    ...financials,
   });
 }
 

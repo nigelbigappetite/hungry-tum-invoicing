@@ -30,6 +30,14 @@ export interface CSVParseResult {
   /** When a single week can be inferred from date/period columns (Mon–Sun). */
   week_start_date?: string;
   week_end_date?: string;
+  /** Financial breakdown fields — populated for Uber Eats CSV. */
+  platform_commission?: number;
+  delivery_fee?: number;
+  restaurant_offers?: number;
+  platform_offers?: number;
+  adjustments?: number;
+  net_payout?: number;
+  order_count?: number;
 }
 
 const DATE_COLUMN_PATTERNS = [
@@ -94,6 +102,26 @@ function tryParseWeekFromCSV(
   return getWeekRangeFromDate(pick);
 }
 
+/** Sum a column by matching header against patterns; returns absolute value or undefined if not found. */
+function sumColByPatterns(
+  headers: string[],
+  rows: Record<string, unknown>[],
+  patterns: string[]
+): number | undefined {
+  const headerMap = new Map(headers.map((h) => [h.toLowerCase().trim(), h]));
+  for (const pattern of patterns) {
+    const matched =
+      headerMap.get(pattern) ??
+      headers.find((h) => h.toLowerCase().trim().includes(pattern));
+    if (matched) {
+      let sum = 0;
+      for (const row of rows) sum += parseNumeric(row[matched]);
+      return Math.round(Math.abs(sum) * 100) / 100;
+    }
+  }
+  return undefined;
+}
+
 /** Uber Eats: prefer Total Order (incl. VAT) = amount made by the site; fallback to Sales + Offers */
 const UBER_TOTAL_ORDER_COL = 'total order (incl. vat)';
 const UBER_SALES_COL = 'sales (incl. vat)';
@@ -120,6 +148,18 @@ export function parseCSV(
   // Uber Eats: prefer Total Order (incl. VAT) — amount made by the site; fallback to Sales + Offers
   if (platform === 'ubereats') {
     const headerMap = new Map(headers.map((h) => [h.toLowerCase().trim(), h]));
+
+    // Extract financial breakdown columns
+    const financials = {
+      platform_commission: sumColByPatterns(headers, rows, ['marketplace fee', 'service fee', 'uber eats fee']),
+      delivery_fee: sumColByPatterns(headers, rows, ['delivery fee']),
+      restaurant_offers: sumColByPatterns(headers, rows, ['offers on items (incl. vat)', 'restaurant funded discounts']),
+      platform_offers: sumColByPatterns(headers, rows, ['uber funded discounts', 'uber funded offers', 'platform funded discounts']),
+      adjustments: sumColByPatterns(headers, rows, ['adjustments', 'adjustment']),
+      net_payout: sumColByPatterns(headers, rows, ['net payout', 'total payout', 'amount paid', 'payout']),
+      order_count: rows.length,
+    };
+
     const totalOrderHeader =
       headerMap.get(UBER_TOTAL_ORDER_COL) ??
       headers.find((h) => {
@@ -137,6 +177,7 @@ export function parseCSV(
         confidence: 'high',
         matched_column: 'Total Order (incl. VAT)',
         row_count: rows.length,
+        ...financials,
         ...(weekFromFile && { week_start_date: weekFromFile.week_start_date, week_end_date: weekFromFile.week_end_date }),
       };
     }
@@ -154,6 +195,7 @@ export function parseCSV(
         confidence: 'high',
         matched_column: 'Sales (incl. VAT) + Offers on items (incl. VAT)',
         row_count: rows.length,
+        ...financials,
         ...(weekFromFile && { week_start_date: weekFromFile.week_start_date, week_end_date: weekFromFile.week_end_date }),
       };
     }
@@ -165,6 +207,7 @@ export function parseCSV(
         confidence: 'medium',
         matched_column: salesHeader,
         row_count: rows.length,
+        ...financials,
         ...(weekFromFile && { week_start_date: weekFromFile.week_start_date, week_end_date: weekFromFile.week_end_date }),
       };
     }

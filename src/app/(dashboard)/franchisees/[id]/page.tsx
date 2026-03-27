@@ -66,6 +66,14 @@ interface PlatformResult {
   file_name: string;
   /** When Deliveroo PDF has multiple Hungry Tum brands (e.g. Bethnal Green), per-brand Total Order Value. */
   deliveroo_brand_breakdown?: Record<string, number>;
+  /** Financial breakdown — populated from parsers. */
+  platform_commission?: number;
+  delivery_fee?: number;
+  restaurant_offers?: number;
+  platform_offers?: number;
+  adjustments?: number;
+  net_payout?: number;
+  order_count?: number;
 }
 
 interface InvoiceWithFranchisee extends Invoice {
@@ -615,7 +623,7 @@ export default function FranchiseeDetailPage() {
               .eq('platform', 'deliveroo')
               .eq('week_start_date', weekStartStr)
               .eq('week_end_date', weekEndStr);
-            const { error: insertError } = await supabase.from('weekly_reports').insert({
+            const { data: insertedReport, error: insertError } = await supabase.from('weekly_reports').insert({
               franchisee_id: id,
               brand,
               platform: 'deliveroo',
@@ -624,8 +632,22 @@ export default function FranchiseeDetailPage() {
               gross_revenue: Math.round(amount * 100) / 100,
               file_path: filePath,
               file_type: result.file_type,
-            });
+            }).select('id').single();
             if (insertError) throw insertError;
+            if (insertedReport?.id) {
+              const totalGrossForStatement = Object.values(bd).reduce((a, b) => a + b, 0);
+              const ratio = totalGrossForStatement > 0 ? amount / totalGrossForStatement : 0;
+              await supabase.from('report_financials').insert({
+                weekly_report_id: insertedReport.id,
+                platform_commission: result.platform_commission != null ? Math.round(result.platform_commission * ratio * 100) / 100 : null,
+                delivery_fee: result.delivery_fee != null ? Math.round(result.delivery_fee * ratio * 100) / 100 : null,
+                restaurant_offers: result.restaurant_offers != null ? Math.round(result.restaurant_offers * ratio * 100) / 100 : null,
+                platform_offers: result.platform_offers != null ? Math.round(result.platform_offers * ratio * 100) / 100 : null,
+                adjustments: result.adjustments != null ? Math.round(result.adjustments * ratio * 100) / 100 : null,
+                net_payout: result.net_payout != null ? Math.round(result.net_payout * ratio * 100) / 100 : null,
+                order_count: result.order_count != null ? Math.round(result.order_count * ratio) : null,
+              });
+            }
           }
         } else {
           const revenue = parseFloat(row.editableRevenue || '0');
@@ -640,7 +662,7 @@ export default function FranchiseeDetailPage() {
             .eq('week_end_date', weekEndStr);
           const filePath = `reports/${id}/${weekStartStr}/${brand}-${row.platform}-${result.file.name}`;
           await supabase.storage.from('invoicing').upload(filePath, result.file, { upsert: true });
-          const { error: insertError } = await supabase.from('weekly_reports').insert({
+          const { data: insertedReport, error: insertError } = await supabase.from('weekly_reports').insert({
             franchisee_id: id,
             brand,
             platform: row.platform,
@@ -649,8 +671,20 @@ export default function FranchiseeDetailPage() {
             gross_revenue: revenue,
             file_path: filePath,
             file_type: result.file_type,
-          });
+          }).select('id').single();
           if (insertError) throw insertError;
+          if (insertedReport?.id) {
+            await supabase.from('report_financials').insert({
+              weekly_report_id: insertedReport.id,
+              platform_commission: result.platform_commission ?? null,
+              delivery_fee: result.delivery_fee ?? null,
+              restaurant_offers: result.restaurant_offers ?? null,
+              platform_offers: result.platform_offers ?? null,
+              adjustments: result.adjustments ?? null,
+              net_payout: result.net_payout ?? null,
+              order_count: result.order_count ?? null,
+            });
+          }
         }
       }
       const franchiseeBrands = Array.isArray(franchisee.brands) && franchisee.brands.length > 0
