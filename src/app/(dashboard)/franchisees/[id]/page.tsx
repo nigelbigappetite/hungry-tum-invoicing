@@ -21,6 +21,7 @@ import {
   formatDate,
   formatWeekRange,
   formatRecommendedBacsDateFromInvoiceDate,
+  getUpcomingFridays,
   getPlatformFeeRate,
   getSlerpSalesPeriodEndForInvoiceWeek,
   getWeekRangeFromDate,
@@ -130,6 +131,21 @@ export default function FranchiseeDetailPage() {
   const [backfillArrears, setBackfillArrears] = useState('6500');
   const [backfillingInvoices, setBackfillingInvoices] = useState(false);
 
+  // Email drafts (payment failure notifications pending review)
+  interface EmailDraft {
+    id: string;
+    invoice_id: string;
+    to_email: string;
+    subject: string;
+    body: string;
+    status: 'draft' | 'sent' | 'discarded';
+    created_at: string;
+  }
+  const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
+  const [approvingDraftId, setApprovingDraftId] = useState<string | null>(null);
+  const [discardingDraftId, setDiscardingDraftId] = useState<string | null>(null);
+  const [expandedDraftId, setExpandedDraftId] = useState<string | null>(null);
+
   // Invoices state (fetch all for metrics; filter in UI for table)
   const [invoices, setInvoices] = useState<InvoiceWithFranchisee[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
@@ -142,6 +158,8 @@ export default function FranchiseeDetailPage() {
   const [recordingPaymentId, setRecordingPaymentId] = useState<string | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
+  const [collectDatePickerId, setCollectDatePickerId] = useState<string | null>(null);
+  const [savingCollectDateId, setSavingCollectDateId] = useState<string | null>(null);
   const [editingInvoice, setEditingInvoice] = useState<InvoiceWithFranchisee | null>(null);
   const [editInvoiceSaving, setEditInvoiceSaving] = useState(false);
   const [editInvoiceForm, setEditInvoiceForm] = useState({ total_gross_revenue: '', fee_amount: '', fee_percentage: '', week_start_date: '' });
@@ -308,9 +326,49 @@ export default function FranchiseeDetailPage() {
     fetchInvoices();
   }, [fetchInvoices]);
 
+  const fetchEmailDrafts = useCallback(async () => {
+    if (!id) return;
+    const { data } = await supabase
+      .from('email_drafts')
+      .select('id, invoice_id, to_email, subject, body, status, created_at')
+      .eq('franchisee_id', id)
+      .eq('status', 'draft')
+      .order('created_at', { ascending: false });
+    setEmailDrafts((data as EmailDraft[]) ?? []);
+  }, [id, supabase]);
+
+  useEffect(() => {
+    fetchEmailDrafts();
+  }, [fetchEmailDrafts]);
+
   useEffect(() => {
     fetchPlatformRevenue();
   }, [fetchPlatformRevenue]);
+
+  const approveDraft = async (draftId: string) => {
+    setApprovingDraftId(draftId);
+    try {
+      const res = await fetch(`/api/approve-email-draft/${draftId}`, { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || 'Failed to send email');
+      } else {
+        await fetchEmailDrafts();
+      }
+    } finally {
+      setApprovingDraftId(null);
+    }
+  };
+
+  const discardDraft = async (draftId: string) => {
+    setDiscardingDraftId(draftId);
+    try {
+      await fetch(`/api/discard-email-draft/${draftId}`, { method: 'POST' });
+      await fetchEmailDrafts();
+    } finally {
+      setDiscardingDraftId(null);
+    }
+  };
 
   const setupBacs = async (isReminder = false) => {
     if (!id) return;
@@ -972,6 +1030,22 @@ export default function FranchiseeDetailPage() {
       alert('Failed to collect via BACS');
     } finally {
       setChargingBacsId(null);
+    }
+  };
+
+  const setCollectDate = async (invoiceId: string, date: string) => {
+    setSavingCollectDateId(invoiceId);
+    setCollectDatePickerId(null);
+    try {
+      await fetch('/api/set-collect-date', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId, collect_from_date: date }),
+        credentials: 'include',
+      });
+      setInvoices(prev => prev.map(inv => inv.id === invoiceId ? { ...inv, collect_from_date: date } : inv));
+    } finally {
+      setSavingCollectDateId(null);
     }
   };
 
@@ -1666,6 +1740,50 @@ export default function FranchiseeDetailPage() {
 
       {activeTab === 'invoices' && (
         <div>
+          {emailDrafts.length > 0 && (
+            <div className="mb-4 space-y-2">
+              {emailDrafts.map((draft) => (
+                <div key={draft.id} className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Mail className="h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Draft email pending review</p>
+                        <p className="text-xs text-amber-700 dark:text-amber-400 truncate">To: {draft.to_email} · {draft.subject}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => setExpandedDraftId(expandedDraftId === draft.id ? null : draft.id)}
+                        className="text-xs text-amber-700 dark:text-amber-400 hover:underline"
+                      >
+                        {expandedDraftId === draft.id ? 'Hide' : 'Preview'}
+                      </button>
+                      <button
+                        onClick={() => discardDraft(draft.id)}
+                        disabled={discardingDraftId === draft.id}
+                        className="rounded px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-700 disabled:opacity-50"
+                      >
+                        {discardingDraftId === draft.id ? 'Discarding…' : 'Discard'}
+                      </button>
+                      <button
+                        onClick={() => approveDraft(draft.id)}
+                        disabled={approvingDraftId === draft.id}
+                        className="rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        {approvingDraftId === draft.id ? 'Sending…' : 'Approve & Send'}
+                      </button>
+                    </div>
+                  </div>
+                  {expandedDraftId === draft.id && (
+                    <pre className="mt-3 whitespace-pre-wrap rounded bg-white dark:bg-neutral-900 border border-amber-100 dark:border-amber-900 p-3 text-xs text-slate-700 dark:text-neutral-300 font-sans">
+                      {draft.body}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {monthlyInvoiceMessage && (
             <div className="mb-4 flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-800">
               <CheckCircle className="h-4 w-4 flex-shrink-0" />
@@ -1855,17 +1973,48 @@ export default function FranchiseeDetailPage() {
                             <option value="sent">Sent</option>
                             <option value="processing">Processing</option>
                             <option value="paid">Paid</option>
+                            <option value="failed">Failed</option>
                           </select>
                         </td>
                         <td className="px-5 py-3.5 text-slate-500 dark:text-neutral-400">
                           {invoice.status === 'processing' ? (
                             <span className="text-xs text-amber-700 dark:text-amber-400">Processing…</span>
+                          ) : invoice.status === 'failed' ? (
+                            <span className="text-xs text-red-600 dark:text-red-400" title={invoice.payment_failure_reason ?? undefined}>
+                              {invoice.payment_failure_reason
+                                ? invoice.payment_failure_reason.replace(/_/g, ' ')
+                                : 'Payment failed'}
+                            </span>
                           ) : franchisee.payment_direction === 'pay_them' ? (
                             <span className="text-xs text-slate-500 dark:text-neutral-400">Pay them</span>
-                          ) : invoice.status !== 'paid' && franchisee.bacs_payment_method_id && invoice.created_at ? (
-                            <span className="text-xs dark:text-neutral-300" title="BACS collection day is Friday">
-                              {formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)}
-                            </span>
+                          ) : invoice.status !== 'paid' && franchisee.bacs_payment_method_id ? (
+                            <div className="relative">
+                              <button
+                                onClick={() => setCollectDatePickerId(collectDatePickerId === invoice.id ? null : invoice.id)}
+                                disabled={savingCollectDateId === invoice.id}
+                                className="text-xs dark:text-neutral-300 underline decoration-dotted underline-offset-2 hover:text-slate-800 dark:hover:text-white disabled:opacity-50"
+                                title="Click to change collection date"
+                              >
+                                {savingCollectDateId === invoice.id
+                                  ? 'Saving…'
+                                  : invoice.collect_from_date
+                                    ? format(parseISO(invoice.collect_from_date), 'EEE d MMM yyyy')
+                                    : formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)}
+                              </button>
+                              {collectDatePickerId === invoice.id && (
+                                <div className="absolute left-0 top-6 z-20 min-w-[180px] rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 shadow-lg py-1">
+                                  {getUpcomingFridays(5).map(opt => (
+                                    <button
+                                      key={opt.value}
+                                      onClick={() => setCollectDate(invoice.id, opt.value)}
+                                      className="block w-full px-4 py-2 text-left text-xs hover:bg-slate-50 dark:hover:bg-neutral-700 text-slate-700 dark:text-neutral-200"
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-xs">—</span>
                           )}
@@ -1911,7 +2060,7 @@ export default function FranchiseeDetailPage() {
                                 onClick={() => chargeBacs(invoice.id)}
                                 disabled={chargingBacsId === invoice.id}
                                 className="rounded-lg p-1.5 text-blue-600 dark:text-neutral-200 dark:hover:bg-neutral-600 dark:hover:text-white hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50"
-                                title="Collect via BACS"
+                                title={invoice.status === 'failed' ? 'Retry BACS collection' : 'Collect via BACS'}
                               >
                                 {chargingBacsId === invoice.id ? (
                                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 dark:border-neutral-300 border-t-transparent" />

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Franchisee, PaymentModel, BRAND_OPTIONS, PLATFORM_LABELS, Platform } from '@/lib/types';
+import { Franchisee, PaymentModel, PLATFORM_LABELS, Platform, BrandRecord } from '@/lib/types';
 import { getBrandLogo } from '@/lib/logos';
 import { X } from 'lucide-react';
 
@@ -54,6 +54,14 @@ export default function FranchiseeForm({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [brandRecords, setBrandRecords] = useState<BrandRecord[]>([]);
+
+  useEffect(() => {
+    supabase.from('brands').select('*').eq('active', true).order('name').then(({ data }) => {
+      if (data) setBrandRecords(data as BrandRecord[]);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const toggleBrand = (b: string) => {
     setBrands((prev) =>
@@ -207,18 +215,21 @@ export default function FranchiseeForm({
               Brands (sites can have multiple)
             </label>
             <div className="flex flex-wrap gap-3 rounded-lg border border-slate-300 dark:border-neutral-700 p-3">
-              {BRAND_OPTIONS.map((b) => {
-                const logo = getBrandLogo(b);
+              {brandRecords.map((br) => {
+                const logo = getBrandLogo(br.name);
                 return (
-                  <label key={b} className="flex items-center gap-2">
+                  <label key={br.id} className="flex items-center gap-2">
                     <input
                       type="checkbox"
-                      checked={brands.includes(b)}
-                      onChange={() => toggleBrand(b)}
+                      checked={brands.includes(br.name)}
+                      onChange={() => toggleBrand(br.name)}
                       className="rounded border-slate-300 text-primary focus:ring-primary"
                     />
                     {logo ? <img src={logo} alt="" className="h-6 w-6 rounded object-contain" /> : null}
-                    <span className="text-sm text-slate-700 dark:text-neutral-200">{b}</span>
+                    <span className="text-sm text-slate-700 dark:text-neutral-200">{br.name}</span>
+                    {br.is_external && (
+                      <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">external</span>
+                    )}
                   </label>
                 );
               })}

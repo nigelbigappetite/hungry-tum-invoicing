@@ -72,12 +72,85 @@ export async function POST(request: NextRequest) {
   }
 
   if (event.type === 'payment_intent.succeeded') {
-    // BACS (or other) payment confirmed – mark invoice paid (BACS often goes processing → succeeded later)
+    // BACS payment confirmed – mark invoice paid
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
     const invoiceId = paymentIntent.metadata?.invoice_id;
     if (invoiceId && url && serviceRoleKey) {
       const supabase = createClient(url, serviceRoleKey);
-      await supabase.from('invoices').update({ status: 'paid' }).eq('id', invoiceId);
+      await supabase
+        .from('invoices')
+        .update({
+          status: 'paid',
+          payment_intent_id: paymentIntent.id,
+          payment_failure_reason: null,
+        })
+        .eq('id', invoiceId);
+    }
+  }
+
+  if (event.type === 'payment_intent.payment_failed') {
+    // BACS payment declined by bank – mark invoice failed so admin can retry
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    const invoiceId = paymentIntent.metadata?.invoice_id;
+    const invoiceNumber = paymentIntent.metadata?.invoice_number;
+    if (invoiceId && url && serviceRoleKey) {
+      const supabase = createClient(url, serviceRoleKey);
+      const lastError = paymentIntent.last_payment_error;
+      const failureReason =
+        lastError?.decline_code ?? lastError?.code ?? lastError?.message ?? 'Payment declined';
+
+      await supabase
+        .from('invoices')
+        .update({
+          status: 'failed',
+          payment_intent_id: paymentIntent.id,
+          payment_failure_reason: failureReason,
+        })
+        .eq('id', invoiceId);
+
+      // Create a draft failure notification email for admin review
+      const { data: invoice } = await supabase
+        .from('invoices')
+        .select('franchisee_id, fee_amount')
+        .eq('id', invoiceId)
+        .single();
+
+      if (invoice) {
+        const { data: franchisee } = await supabase
+          .from('franchisees')
+          .select('name, email')
+          .eq('id', invoice.franchisee_id)
+          .single();
+
+        if (franchisee?.email) {
+          const firstName = franchisee.name?.split(/\s+/)[0] || 'there';
+          const amount = `£${Number(invoice.fee_amount).toFixed(2)}`;
+          const ref = invoiceNumber ?? invoiceId;
+
+          const subject = `Action Required – Payment Collection Unsuccessful | Invoice ${ref}`;
+          const body = `Hi ${firstName},
+
+I hope you're well. I'm getting in touch to let you know that our recent attempt to collect payment for Invoice ${ref} (${amount}) via BACS Direct Debit was unsuccessful.
+
+We'll automatically retry the collection in the next few business days. In most cases this resolves itself, so no immediate action is needed.
+
+However, if you're aware of any issues with your bank account or would prefer to arrange payment another way, please don't hesitate to get in touch and we'll sort it out together. It's important we get this resolved promptly to keep your account in good standing.
+
+If you have any questions at all, just reply to this email.
+
+Thanks,
+Hungry Tum`;
+
+          await supabase.from('email_drafts').insert({
+            invoice_id: invoiceId,
+            franchisee_id: invoice.franchisee_id,
+            to_email: franchisee.email,
+            subject,
+            body,
+            trigger: 'payment_failed',
+          });
+        }
+      }
     }
   }
 

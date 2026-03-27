@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Franchisee, BRAND_OPTIONS } from '@/lib/types';
+import { Franchisee, BrandRecord } from '@/lib/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { Plus, Pencil, Trash2, MapPin, Mail, Building2, CheckCircle, ChevronRight, Banknote, Send } from 'lucide-react';
 import FranchiseeForm from '@/components/FranchiseeForm';
@@ -20,6 +20,7 @@ function FranchiseesPageContent() {
   const [settingUpBacsId, setSettingUpBacsId] = useState<string | null>(null);
   const [syncingBacs, setSyncingBacs] = useState(false);
   const [brandFilter, setBrandFilter] = useState<string>('all');
+  const [brandRecords, setBrandRecords] = useState<BrandRecord[]>([]);
   const autoSyncAttemptedRef = useRef(false);
 
   const fetchFranchisees = useCallback(async () => {
@@ -37,6 +38,10 @@ function FranchiseesPageContent() {
 
   useEffect(() => {
     fetchFranchisees();
+    supabase.from('brands').select('*').eq('active', true).order('name').then(({ data }) => {
+      if (data) setBrandRecords(data as BrandRecord[]);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchFranchisees]);
 
   useEffect(() => {
@@ -187,7 +192,7 @@ function FranchiseesPageContent() {
         </div>
       ) : (
         <>
-          {BRAND_OPTIONS.length > 0 && (
+          {brandRecords.length > 0 && (
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-slate-500 dark:text-neutral-400">Brand:</span>
@@ -197,8 +202,8 @@ function FranchiseesPageContent() {
                   className="rounded-lg border border-slate-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
                 >
                   <option value="all">All brands</option>
-                  {BRAND_OPTIONS.map((b) => (
-                    <option key={b} value={b}>{b}</option>
+                  {brandRecords.map((b) => (
+                    <option key={b.id} value={b.name}>{b.name}</option>
                   ))}
                   <option value="none">No brands</option>
                 </select>

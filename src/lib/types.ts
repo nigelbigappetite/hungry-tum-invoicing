@@ -1,11 +1,23 @@
 export type PaymentModel = 'percentage' | 'monthly_fixed' | 'percentage_per_platform';
 export type Platform = 'deliveroo' | 'ubereats' | 'justeat' | 'slerp';
-export type InvoiceStatus = 'draft' | 'sent' | 'processing' | 'paid';
+export type InvoiceStatus = 'draft' | 'sent' | 'processing' | 'paid' | 'failed';
 export type FileType = 'csv' | 'pdf' | 'xlsx' | 'manual';
 
 /** Hungry Tum brands – used for franchisee and report/invoice brand */
 export const BRAND_OPTIONS = ['Wing Shack', 'SMSH BN', 'Eggs n Stuff'] as const;
 export type Brand = (typeof BRAND_OPTIONS)[number];
+
+/** DB-backed brand record from the brands table */
+export interface BrandRecord {
+  id: string;
+  name: string;
+  is_external: boolean;
+  /** 'ht' = fees go to Hungry Tum; otherwise the brand name that receives the fee */
+  fee_beneficiary: string;
+  color: string;
+  active: boolean;
+  created_at: string;
+}
 
 export interface Franchisee {
   id: string;
@@ -57,6 +69,9 @@ export interface Invoice {
   fee_amount: number;
   status: InvoiceStatus;
   pdf_path: string | null;
+  payment_intent_id: string | null;
+  payment_failure_reason: string | null;
+  collect_from_date: string | null;
   created_at: string;
   franchisee?: Franchisee;
   weekly_reports?: WeeklyReport[];
@@ -86,6 +101,7 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   sent: 'Sent',
   processing: 'Processing',
   paid: 'Paid',
+  failed: 'Failed',
 };
 
 export const STATUS_COLORS: Record<InvoiceStatus, string> = {
@@ -93,4 +109,5 @@ export const STATUS_COLORS: Record<InvoiceStatus, string> = {
   sent: 'bg-blue-100 text-blue-800',
   processing: 'bg-amber-100 text-amber-800',
   paid: 'bg-green-100 text-green-800',
+  failed: 'bg-red-100 text-red-800',
 };

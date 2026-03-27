@@ -94,7 +94,8 @@ function tryParseWeekFromCSV(
   return getWeekRangeFromDate(pick);
 }
 
-/** Uber Eats: gross = Sales (incl. VAT) + Offers on items (incl. VAT) = revenue after offers */
+/** Uber Eats: prefer Total Order (incl. VAT) = amount made by the site; fallback to Sales + Offers */
+const UBER_TOTAL_ORDER_COL = 'total order (incl. vat)';
 const UBER_SALES_COL = 'sales (incl. vat)';
 const UBER_OFFERS_COL = 'offers on items (incl. vat)';
 
@@ -116,9 +117,30 @@ export function parseCSV(
   const rows = parsed.data as Record<string, unknown>[];
   const weekFromFile = tryParseWeekFromCSV(headers, rows);
 
-  // Uber Eats: use revenue after offers (Sales + Offers on items)
+  // Uber Eats: prefer Total Order (incl. VAT) — amount made by the site; fallback to Sales + Offers
   if (platform === 'ubereats') {
     const headerMap = new Map(headers.map((h) => [h.toLowerCase().trim(), h]));
+    const totalOrderHeader =
+      headerMap.get(UBER_TOTAL_ORDER_COL) ??
+      headers.find((h) => {
+        const n = h.toLowerCase().replace(/\s+/g, ' ').trim();
+        return n === UBER_TOTAL_ORDER_COL || (n.includes('total order') && n.includes('incl') && n.includes('vat'));
+      });
+
+    if (totalOrderHeader) {
+      let grossRevenue = 0;
+      for (const row of rows) {
+        grossRevenue += parseNumeric(row[totalOrderHeader]);
+      }
+      return {
+        gross_revenue: Math.round(grossRevenue * 100) / 100,
+        confidence: 'high',
+        matched_column: 'Total Order (incl. VAT)',
+        row_count: rows.length,
+        ...(weekFromFile && { week_start_date: weekFromFile.week_start_date, week_end_date: weekFromFile.week_end_date }),
+      };
+    }
+
     const salesHeader = headerMap.get(UBER_SALES_COL) ?? headers.find((h) => h.toLowerCase().trim() === UBER_SALES_COL);
     const offersHeader = headerMap.get(UBER_OFFERS_COL) ?? headers.find((h) => h.toLowerCase().trim() === UBER_OFFERS_COL);
 
@@ -135,7 +157,6 @@ export function parseCSV(
         ...(weekFromFile && { week_start_date: weekFromFile.week_start_date, week_end_date: weekFromFile.week_end_date }),
       };
     }
-    // Fallback: only sales column found — still use it but medium confidence (pre-offer)
     if (salesHeader) {
       let grossRevenue = 0;
       for (const row of rows) grossRevenue += parseNumeric(row[salesHeader]);

@@ -83,6 +83,24 @@ export function formatRecommendedBacsDateFromInvoiceDate(invoiceDate: string): s
   return format(d, 'EEE d MMM yyyy');
 }
 
+/** Return the next N Fridays from today as { label, value } options. */
+export function getUpcomingFridays(count = 5): { label: string; value: string }[] {
+  const options: { label: string; value: string }[] = [];
+  const today = new Date();
+  // Find next Friday (or today if it's Friday)
+  const dayOfWeek = today.getDay(); // 0 = Sun, 5 = Fri
+  const daysUntilFriday = dayOfWeek <= 5 ? 5 - dayOfWeek : 6;
+  let friday = addDays(today, daysUntilFriday === 0 ? 0 : daysUntilFriday);
+  for (let i = 0; i < count; i++) {
+    options.push({
+      label: format(friday, 'EEE d MMM yyyy'),
+      value: format(friday, 'yyyy-MM-dd'),
+    });
+    friday = addDays(friday, 7);
+  }
+  return options;
+}
+
 /**
  * Slerp: payout every Monday for the previous Tue–Mon sales period.
  * Returns the Monday (payout date) that ends the 7-day period containing the given fulfillment date.

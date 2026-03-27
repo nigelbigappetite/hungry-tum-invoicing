@@ -37,6 +37,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    // 'failed' status is allowed – this is a retry after a declined payment
 
     const { data: franchisee, error: franchiseeError } = await supabase
       .from('franchisees')
@@ -78,7 +79,14 @@ export async function POST(request: NextRequest) {
     // Set status to 'processing' when BACS is in progress; only webhook marks 'paid' when bank confirms.
     const isTestMode = secretKey.startsWith('sk_test_');
     if (paymentIntent.status === 'processing') {
-      await supabase.from('invoices').update({ status: 'processing' }).eq('id', invoiceId);
+      await supabase
+        .from('invoices')
+        .update({
+          status: 'processing',
+          payment_intent_id: paymentIntent.id,
+          payment_failure_reason: null,
+        })
+        .eq('id', invoiceId);
       if (isTestMode) {
         // Test mode: also mark paid so you can test without webhooks to localhost
         await supabase.from('invoices').update({ status: 'paid' }).eq('id', invoiceId);
