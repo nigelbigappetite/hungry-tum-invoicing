@@ -267,7 +267,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           <View style={styles.brand}>
             <View style={styles.brandIcon}>
               {showLogo ? (
-                <Image src={logoPath!} alt="Hungry Tum logo" style={{ width: 68, height: 68, borderRadius: 8 }} />
+                <Image src={logoPath!} style={{ width: 68, height: 68, borderRadius: 8 }} />
               ) : (
                 <Text style={styles.brandIconText}>HT</Text>
               )}
