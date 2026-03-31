@@ -2317,10 +2317,14 @@ export default function FranchiseeDetailPage() {
                                   We pay them. Use &quot;Pay due funds&quot; above when you have paid this invoice.
                                 </p>
                               )}
-                              {invoice.status !== 'paid' && invoice.status !== 'processing' && franchisee.payment_direction !== 'pay_them' && franchisee.bacs_payment_method_id && invoice.created_at && (
+                              {invoice.status !== 'paid' &&
+                                invoice.status !== 'processing' &&
+                                franchisee.payment_direction !== 'pay_them' &&
+                                franchisee.bacs_payment_method_id &&
+                                invoice.created_at &&
+                                (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0) && (
                                 <p className="mb-3 rounded-md bg-blue-50 dark:bg-neutral-700 dark:text-neutral-200 px-3 py-2 text-xs text-blue-800">
-                                  <strong>Collect BACS from:</strong>{' '}
-                                  {formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)} — Friday.
+                                  Funds will clear by BACS around 7–10 working days from receipt of the invoice.
                                 </p>
                               )}
                               {franchisee.email && (
@@ -2668,12 +2672,6 @@ export default function FranchiseeDetailPage() {
                         <tr key={`${invoice.id}-catch-up-detail`}>
                           <td colSpan={5} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
                             <div className="rounded-lg bg-white dark:bg-neutral-800 p-4 shadow-sm">
-                              {invoice.status !== 'paid' && invoice.status !== 'processing' && franchisee.payment_direction !== 'pay_them' && franchisee.bacs_payment_method_id && invoice.created_at && (
-                                <p className="mb-3 rounded-md bg-blue-50 dark:bg-neutral-700 dark:text-neutral-200 px-3 py-2 text-xs text-blue-800">
-                                  <strong>Collect BACS from:</strong>{' '}
-                                  {formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)} — Friday.
-                                </p>
-                              )}
                               {franchisee.email && (
                                 <p className="mb-3">
                                   <button

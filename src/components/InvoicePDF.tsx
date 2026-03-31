@@ -7,7 +7,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer';
 import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, Platform, InvoiceLineItem } from '@/lib/types';
-import { formatRecommendedBacsDateFromInvoiceDate, getPlatformFeeRate } from '@/lib/utils';
+import { getPlatformFeeRate } from '@/lib/utils';
 
 // Use built-in Helvetica so PDF generation works in Node (no font URL fetch)
 const styles = StyleSheet.create({
@@ -222,10 +222,9 @@ interface InvoicePDFProps {
 
 const AGGREGATOR_PLATFORMS = ['deliveroo', 'ubereats', 'justeat'] as const;
 
-export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], slerpPayoutDate, paymentDetails, bacsCollectionDate, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
+export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], slerpPayoutDate, paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
   const payThem = franchisee.payment_direction === 'pay_them' && amountWePay != null;
   const showLogo = Boolean(logoPath?.trim());
-  const directDebitFriday = bacsCollectionDate?.trim() || (invoice.created_at ? formatRecommendedBacsDateFromInvoiceDate(invoice.created_at) : '');
   const aggregatorReports = (reports || []).filter((r) => r && AGGREGATOR_PLATFORMS.includes(r.platform as typeof AGGREGATOR_PLATFORMS[number]));
   const catchUpLineItems = Array.isArray(invoice.line_items) ? invoice.line_items.filter(Boolean) as InvoiceLineItem[] : [];
   const isCatchUpInvoice = catchUpLineItems.length > 0;
@@ -556,10 +555,14 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             </>
           ) : (
             <>
-              <Text style={styles.footerTitle}>{paymentDetails?.bankName || paymentDetails?.sortCode || paymentDetails?.accountNumber ? 'Payment details' : 'Direct Debit'}</Text>
+              <Text style={styles.footerTitle}>
+                {isCatchUpInvoice
+                  ? 'Payment options'
+                  : 'Direct Debit'}
+              </Text>
               {noPaymentRequired ? (
                 <Text style={styles.footerText}>No payment is required.</Text>
-              ) : paymentDetails?.bankName || paymentDetails?.sortCode || paymentDetails?.accountNumber ? (
+              ) : isCatchUpInvoice && (paymentDetails?.bankName || paymentDetails?.sortCode || paymentDetails?.accountNumber) ? (
                 <>
                   <Text style={styles.footerText}>
                     Please pay by bank transfer using the details below.
@@ -576,23 +579,13 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   <Text style={styles.footerText}>
                     Reference: {invoice.invoice_number}
                   </Text>
-                  {paymentDetails?.paymentDays && (
-                    <Text style={styles.footerText}>
-                      Please pay within {paymentDetails.paymentDays} days.
-                    </Text>
-                  )}
-                  {directDebitFriday && (
-                    <Text style={styles.footerText}>
-                      Suggested payment date: {directDebitFriday}
-                    </Text>
-                  )}
                 </>
               ) : (
                 <Text style={styles.footerText}>
-                  The direct debit payment will take place on or around 5-7 working days from now.
+                  Funds will clear by BACS around 7–10 working days from receipt of the invoice.
                 </Text>
               )}
-              {!paymentDetails?.bankName && !paymentDetails?.sortCode && !paymentDetails?.accountNumber && (
+              {!isCatchUpInvoice && (
                 <Text style={styles.footerText}>
                   Reference: {invoice.invoice_number}
                 </Text>
