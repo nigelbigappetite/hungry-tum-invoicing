@@ -553,6 +553,12 @@ export default function FranchiseeDetailPage() {
       : null;
   const filteredInvoices =
     statusFilter === 'all' ? invoices : invoices.filter((i) => i.status === statusFilter);
+  const standardFilteredInvoices = filteredInvoices.filter(
+    (invoice) => !Array.isArray(invoice.line_items) || invoice.line_items.length === 0
+  );
+  const catchUpFilteredInvoices = filteredInvoices.filter(
+    (invoice) => Array.isArray(invoice.line_items) && invoice.line_items.length > 0
+  );
   const isMonthlyFixedSite = franchisee?.payment_model === 'monthly_fixed';
   const formatMonthLabel = (dateStr: string) => {
     const d = parseISO(dateStr);
@@ -1977,7 +1983,7 @@ export default function FranchiseeDetailPage() {
                 disabled={selectedCatchUpInvoiceIds.length === 0}
                 className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
               >
-                Create catch-up invoice
+                Review catch-up invoice
               </button>
               <select
                 value={statusFilter}
@@ -1998,7 +2004,7 @@ export default function FranchiseeDetailPage() {
             <div className="flex justify-center py-12">
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
             </div>
-          ) : filteredInvoices.length === 0 ? (
+          ) : standardFilteredInvoices.length === 0 && catchUpFilteredInvoices.length === 0 ? (
             <div className="rounded-xl border-2 border-dashed border-slate-200 dark:border-neutral-600 dark:bg-neutral-800 py-16 text-center">
               <FileText className="mx-auto h-12 w-12 text-slate-300 dark:text-neutral-500" />
               <p className="mt-3 text-lg font-medium text-slate-400 dark:text-neutral-200">
@@ -2014,8 +2020,14 @@ export default function FranchiseeDetailPage() {
                   : 'Try a different status filter.'}
               </p>
             </div>
-          ) : (
+          ) : standardFilteredInvoices.length > 0 ? (
             <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 shadow-sm">
+              <div className="border-b border-slate-200 dark:border-neutral-600 px-5 py-3">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-neutral-100">Weekly invoices</h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-neutral-400">
+                  Select from this table to create a combined catch-up invoice.
+                </p>
+              </div>
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-slate-100 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-700">
@@ -2056,7 +2068,7 @@ export default function FranchiseeDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInvoices.map((invoice) => (
+                  {standardFilteredInvoices.map((invoice) => (
                     <Fragment key={invoice.id}>
                       <tr
                         key={invoice.id}
@@ -2507,6 +2519,220 @@ export default function FranchiseeDetailPage() {
                 </tbody>
               </table>
             </div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-neutral-100">Weekly invoices</h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-neutral-400">
+                No weekly invoices match the current filter.
+              </p>
+            </div>
+          )}
+
+          {catchUpFilteredInvoices.length > 0 && (
+            <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 shadow-sm">
+              <div className="border-b border-slate-200 dark:border-neutral-600 px-5 py-3">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-neutral-100">Catch-up invoices</h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-neutral-400">
+                  Combined invoices created from older unpaid weeks.
+                </p>
+              </div>
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-700">
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
+                      Invoice
+                    </th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
+                      Coverage
+                    </th>
+                    <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
+                      Amount due
+                    </th>
+                    <th className="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
+                      Status
+                    </th>
+                    <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {catchUpFilteredInvoices.map((invoice) => (
+                    <Fragment key={invoice.id}>
+                      <tr className="border-b border-slate-50 dark:border-neutral-600 transition-colors hover:bg-slate-50/50 dark:hover:bg-neutral-700/50">
+                        <td className="px-5 py-3.5">
+                          <span className="text-sm font-semibold text-slate-900 dark:text-neutral-100">{invoice.invoice_number}</span>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <span className="text-sm text-slate-500 dark:text-neutral-400">
+                            {formatInvoicePeriodLabel(invoice)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-right">
+                          <span className="text-sm font-bold text-primary-dark dark:text-primary-light">
+                            {formatCurrency(invoice.fee_amount)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3.5 text-center">
+                          <select
+                            value={invoice.status}
+                            onChange={(e) => updateStatus(invoice.id, e.target.value as InvoiceStatus)}
+                            className={cn(
+                              'rounded-full border-0 px-3 py-1 text-xs font-semibold cursor-pointer',
+                              STATUS_COLORS[invoice.status as InvoiceStatus]
+                            )}
+                          >
+                            <option value="draft">Draft</option>
+                            <option value="sent">Sent</option>
+                            <option value="processing">Processing</option>
+                            <option value="paid">Paid</option>
+                            <option value="failed">Failed</option>
+                          </select>
+                        </td>
+                        <td className="px-5 py-3.5 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {invoice.status === 'draft' && (
+                              <button
+                                onClick={() => openEditInvoice(invoice)}
+                                className="rounded-lg p-1.5 text-slate-400 dark:text-neutral-400 hover:bg-slate-100 dark:hover:bg-neutral-600 hover:text-slate-600 dark:hover:text-neutral-100"
+                                title="Edit invoice (draft only)"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => toggleExpand(invoice)}
+                              className="rounded-lg p-1.5 text-slate-400 dark:text-neutral-400 hover:bg-slate-100 dark:hover:bg-neutral-600 hover:text-slate-600 dark:hover:text-neutral-100"
+                              title="View details"
+                            >
+                              {expandedId === invoice.id ? (
+                                <ChevronUp className="h-4 w-4" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4" />
+                              )}
+                            </button>
+                            {franchisee.email && (
+                              <button
+                                onClick={() => sendInvoiceEmail(invoice)}
+                                disabled={sendingEmailId === invoice.id}
+                                className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-50"
+                                title={`Send PDF to ${franchisee.email}`}
+                              >
+                                {sendingEmailId === invoice.id ? (
+                                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
+                                ) : (
+                                  <Send className="h-4 w-4" />
+                                )}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => previewInvoicePdf(invoice.id)}
+                              disabled={previewingPdfId === invoice.id}
+                              className="rounded-lg p-1.5 text-slate-400 dark:text-neutral-400 hover:bg-slate-100 dark:hover:bg-neutral-600 hover:text-slate-600 dark:hover:text-neutral-100 disabled:opacity-50"
+                              title="Preview PDF"
+                            >
+                              {previewingPdfId === invoice.id ? (
+                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                              ) : (
+                                <Eye className="h-4 w-4" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => generateAndDownloadPdf(invoice.id)}
+                              disabled={generatingPdf === invoice.id}
+                              className="rounded-lg p-1.5 text-slate-400 dark:text-neutral-400 hover:bg-slate-100 dark:hover:bg-neutral-600 hover:text-slate-600 dark:hover:text-neutral-100 disabled:opacity-50"
+                              title="Download PDF"
+                            >
+                              {generatingPdf === invoice.id ? (
+                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                              ) : (
+                                <Download className="h-4 w-4" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => deleteInvoice(invoice)}
+                              disabled={deletingInvoiceId === invoice.id}
+                              className="rounded-lg p-1.5 text-slate-400 dark:text-neutral-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
+                              title="Delete invoice"
+                            >
+                              {deletingInvoiceId === invoice.id ? (
+                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {expandedId === invoice.id && (
+                        <tr key={`${invoice.id}-catch-up-detail`}>
+                          <td colSpan={5} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
+                            <div className="rounded-lg bg-white dark:bg-neutral-800 p-4 shadow-sm">
+                              {invoice.status !== 'paid' && invoice.status !== 'processing' && franchisee.payment_direction !== 'pay_them' && franchisee.bacs_payment_method_id && invoice.created_at && (
+                                <p className="mb-3 rounded-md bg-blue-50 dark:bg-neutral-700 dark:text-neutral-200 px-3 py-2 text-xs text-blue-800">
+                                  <strong>Collect BACS from:</strong>{' '}
+                                  {formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)} — Friday.
+                                </p>
+                              )}
+                              {franchisee.email && (
+                                <p className="mb-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => sendInvoiceEmail(invoice, TEST_INVOICE_EMAIL)}
+                                    disabled={sendingEmailId === invoice.id}
+                                    className="text-xs text-slate-500 dark:text-neutral-400 underline hover:text-slate-700 dark:hover:text-neutral-200 disabled:opacity-50"
+                                  >
+                                    Send test copy to {TEST_INVOICE_EMAIL}
+                                  </button>
+                                </p>
+                              )}
+                              <h4 className="mb-3 text-sm font-semibold text-slate-700 dark:text-neutral-200">Catch-up breakdown</h4>
+                              <div className="space-y-2">
+                                {invoice.line_items?.map((item, idx) => (
+                                  <div
+                                    key={`${item.source_invoice_id ?? item.label}-${idx}`}
+                                    className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-neutral-700 px-4 py-2"
+                                  >
+                                    <div>
+                                      <p className="text-sm text-slate-700 dark:text-neutral-200">{item.label}</p>
+                                      {item.source_invoice_number && (
+                                        <p className="text-xs text-slate-500 dark:text-neutral-400">{item.source_invoice_number}</p>
+                                      )}
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-sm font-semibold text-slate-900 dark:text-neutral-100">
+                                        {formatCurrency(item.fee_amount)}
+                                      </p>
+                                      <p className="text-xs text-slate-500 dark:text-neutral-400">
+                                        Gross {formatCurrency(item.gross_revenue)}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+                                <div className="mt-2 flex items-center justify-between border-t border-slate-200 dark:border-neutral-600 px-4 pt-3">
+                                  <span className="text-sm font-semibold text-slate-700 dark:text-neutral-200">Total gross revenue</span>
+                                  <span className="text-sm font-bold text-slate-900 dark:text-neutral-100">
+                                    {formatCurrency(invoice.total_gross_revenue)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between px-4">
+                                  <span className="text-sm font-semibold text-primary-dark dark:text-primary-light">
+                                    Total amount due
+                                  </span>
+                                  <span className="text-sm font-bold text-primary-dark dark:text-primary-light">
+                                    {formatCurrency(invoice.fee_amount)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -2516,7 +2742,7 @@ export default function FranchiseeDetailPage() {
           <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-neutral-800 shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-neutral-700 px-6 py-4">
               <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-neutral-100">Catch-up invoice preview</h3>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-neutral-100">Review catch-up invoice</h3>
                 <p className="mt-1 text-sm text-slate-500 dark:text-neutral-400">
                   Review the selected weeks before creating the draft invoice.
                 </p>
