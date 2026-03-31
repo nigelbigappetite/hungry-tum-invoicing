@@ -62,6 +62,10 @@ export interface Invoice {
   brand: string | null;
   /** All brands on this combined weekly invoice (for logo display). When set, brand may be null. */
   brands?: string[] | null;
+  /** Source invoice ids when this invoice is a catch-up invoice. */
+  source_invoice_ids?: string[] | null;
+  /** Stored invoice lines for manual catch-up invoices. */
+  line_items?: InvoiceLineItem[] | null;
   week_start_date: string;
   week_end_date: string;
   total_gross_revenue: number;
@@ -75,6 +79,16 @@ export interface Invoice {
   created_at: string;
   franchisee?: Franchisee;
   weekly_reports?: WeeklyReport[];
+}
+
+export interface InvoiceLineItem {
+  label: string;
+  period_start: string;
+  period_end: string;
+  gross_revenue: number;
+  fee_amount: number;
+  source_invoice_id?: string | null;
+  source_invoice_number?: string | null;
 }
 
 export interface ParsedFileResult {

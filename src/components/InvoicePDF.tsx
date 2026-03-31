@@ -6,7 +6,7 @@ import {
   Image,
   StyleSheet,
 } from '@react-pdf/renderer';
-import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, Platform } from '@/lib/types';
+import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, Platform, InvoiceLineItem } from '@/lib/types';
 import { formatRecommendedBacsDateFromInvoiceDate, getPlatformFeeRate } from '@/lib/utils';
 
 // Use built-in Helvetica so PDF generation works in Node (no font URL fetch)
@@ -227,6 +227,8 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const showLogo = Boolean(logoPath?.trim());
   const directDebitFriday = bacsCollectionDate?.trim() || (invoice.created_at ? formatRecommendedBacsDateFromInvoiceDate(invoice.created_at) : '');
   const aggregatorReports = (reports || []).filter((r) => r && AGGREGATOR_PLATFORMS.includes(r.platform as typeof AGGREGATOR_PLATFORMS[number]));
+  const catchUpLineItems = Array.isArray(invoice.line_items) ? invoice.line_items.filter(Boolean) as InvoiceLineItem[] : [];
+  const isCatchUpInvoice = catchUpLineItems.length > 0;
   const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed';
   const isMaidstoneSite = ((franchisee.location || '').toLowerCase().includes('maidstone') || (franchisee.name || '').toLowerCase().includes('maidstone'));
   const periodLabel = `${formatDateStr(invoice.week_start_date)} - ${formatDateStr(invoice.week_end_date)}`;
@@ -265,7 +267,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           <View style={styles.brand}>
             <View style={styles.brandIcon}>
               {showLogo ? (
-                <Image src={logoPath!} style={{ width: 68, height: 68, borderRadius: 8 }} />
+                <Image src={logoPath!} alt="Hungry Tum logo" style={{ width: 68, height: 68, borderRadius: 8 }} />
               ) : (
                 <Text style={styles.brandIconText}>HT</Text>
               )}
@@ -365,6 +367,45 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 </View>
               )}
             </>
+          ) : isCatchUpInvoice ? (
+            <>
+              <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
+                Catch-up invoice
+              </Text>
+              <View style={styles.tableHeader}>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>
+                  Week
+                </Text>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colAmount }}>
+                  Gross Revenue
+                </Text>
+                <Text style={{ ...styles.tableHeaderText, ...styles.colFee }}>
+                  Amount Due
+                </Text>
+              </View>
+
+              {catchUpLineItems.map((item, idx) => (
+                <View key={`${item.source_invoice_id ?? item.label}-${idx}`} style={styles.tableRow}>
+                  <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
+                    {item.label}
+                  </Text>
+                  <Text style={{ ...styles.infoText, ...styles.colAmount, fontWeight: 600 }}>
+                    {formatGBP(item.gross_revenue)}
+                  </Text>
+                  <Text style={{ ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c' }}>
+                    {formatGBP(item.fee_amount)}
+                  </Text>
+                </View>
+              ))}
+
+              <View style={styles.totalRow}>
+                <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Total Gross Revenue</Text>
+                <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
+                  {formatGBP(catchUpLineItems.reduce((sum, item) => sum + Number(item.gross_revenue ?? 0), 0))}
+                </Text>
+                <View style={styles.colFee} />
+              </View>
+            </>
           ) : (
             <>
               <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
@@ -426,6 +467,8 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 ? 'Amount due (invoice total)'
                 : isMonthlyFixedInvoice
                   ? 'Total monthly franchise fee'
+                  : isCatchUpInvoice
+                    ? 'Total catch-up invoice'
                   : `Total franchise fee (${invoice.fee_percentage}%)`}
             </Text>
             <Text
@@ -513,17 +556,47 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             </>
           ) : (
             <>
-              <Text style={styles.footerTitle}>Direct Debit</Text>
+              <Text style={styles.footerTitle}>{paymentDetails?.bankName || paymentDetails?.sortCode || paymentDetails?.accountNumber ? 'Payment details' : 'Direct Debit'}</Text>
               {noPaymentRequired ? (
                 <Text style={styles.footerText}>No payment is required.</Text>
+              ) : paymentDetails?.bankName || paymentDetails?.sortCode || paymentDetails?.accountNumber ? (
+                <>
+                  <Text style={styles.footerText}>
+                    Please pay by bank transfer using the details below.
+                  </Text>
+                  {paymentDetails?.bankName && (
+                    <Text style={styles.footerText}>Bank: {paymentDetails.bankName}</Text>
+                  )}
+                  {paymentDetails?.sortCode && (
+                    <Text style={styles.footerText}>Sort code: {paymentDetails.sortCode}</Text>
+                  )}
+                  {paymentDetails?.accountNumber && (
+                    <Text style={styles.footerText}>Account number: {paymentDetails.accountNumber}</Text>
+                  )}
+                  <Text style={styles.footerText}>
+                    Reference: {invoice.invoice_number}
+                  </Text>
+                  {paymentDetails?.paymentDays && (
+                    <Text style={styles.footerText}>
+                      Please pay within {paymentDetails.paymentDays} days.
+                    </Text>
+                  )}
+                  {directDebitFriday && (
+                    <Text style={styles.footerText}>
+                      Suggested payment date: {directDebitFriday}
+                    </Text>
+                  )}
+                </>
               ) : (
                 <Text style={styles.footerText}>
                   The direct debit payment will take place on or around 5-7 working days from now.
                 </Text>
               )}
-              <Text style={styles.footerText}>
-                Reference: {invoice.invoice_number}
-              </Text>
+              {!paymentDetails?.bankName && !paymentDetails?.sortCode && !paymentDetails?.accountNumber && (
+                <Text style={styles.footerText}>
+                  Reference: {invoice.invoice_number}
+                </Text>
+              )}
             </>
           )}
         </View>

@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   Franchisee,
   Invoice,
+  InvoiceLineItem,
   InvoiceStatus,
   STATUS_COLORS,
   PLATFORM_LABELS,
@@ -168,6 +169,9 @@ export default function FranchiseeDetailPage() {
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
   const [collectDatePickerId, setCollectDatePickerId] = useState<string | null>(null);
   const [savingCollectDateId, setSavingCollectDateId] = useState<string | null>(null);
+  const [selectedCatchUpInvoiceIds, setSelectedCatchUpInvoiceIds] = useState<string[]>([]);
+  const [showCatchUpPreview, setShowCatchUpPreview] = useState(false);
+  const [creatingCatchUpInvoice, setCreatingCatchUpInvoice] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<InvoiceWithFranchisee | null>(null);
   const [editInvoiceSaving, setEditInvoiceSaving] = useState(false);
   const [editInvoiceForm, setEditInvoiceForm] = useState({ total_gross_revenue: '', fee_amount: '', fee_percentage: '', week_start_date: '' });
@@ -333,6 +337,20 @@ export default function FranchiseeDetailPage() {
   useEffect(() => {
     fetchInvoices();
   }, [fetchInvoices]);
+
+  useEffect(() => {
+    setSelectedCatchUpInvoiceIds((current) =>
+      current.filter((invoiceId) =>
+        invoices.some(
+          (invoice) =>
+            invoice.id === invoiceId &&
+            invoice.status !== 'paid' &&
+            invoice.status !== 'processing' &&
+            (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0)
+        )
+      )
+    );
+  }, [invoices]);
 
   const fetchEmailDrafts = useCallback(async () => {
     if (!id) return;
@@ -536,18 +554,52 @@ export default function FranchiseeDetailPage() {
   const filteredInvoices =
     statusFilter === 'all' ? invoices : invoices.filter((i) => i.status === statusFilter);
   const isMonthlyFixedSite = franchisee?.payment_model === 'monthly_fixed';
-  const isMaidstoneSite = useMemo(() => {
-    if (!franchisee) return false;
-    const location = (franchisee.location || '').toLowerCase();
-    const name = (franchisee.name || '').toLowerCase();
-    return location.includes('maidstone') || name.includes('maidstone');
-  }, [franchisee]);
   const formatMonthLabel = (dateStr: string) => {
     const d = parseISO(dateStr);
     return isNaN(d.getTime()) ? dateStr : format(d, 'MMM yyyy');
   };
   const formatInvoicePeriodLabel = (invoice: Pick<Invoice, 'week_start_date' | 'week_end_date'>) =>
     isMonthlyFixedSite ? formatMonthLabel(invoice.week_start_date) : formatWeekRange(invoice.week_start_date, invoice.week_end_date);
+  const catchUpEligibleInvoices = useMemo(
+    () =>
+      invoices.filter(
+        (invoice) =>
+          invoice.status !== 'paid' &&
+          invoice.status !== 'processing' &&
+          (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0)
+      ),
+    [invoices]
+  );
+  const catchUpSelectedInvoices = useMemo(
+    () =>
+      catchUpEligibleInvoices
+        .filter((invoice) => selectedCatchUpInvoiceIds.includes(invoice.id))
+        .sort((a, b) => {
+          if (a.week_end_date === b.week_end_date) return b.week_start_date.localeCompare(a.week_start_date);
+          return b.week_end_date.localeCompare(a.week_end_date);
+        }),
+    [catchUpEligibleInvoices, selectedCatchUpInvoiceIds]
+  );
+  const catchUpPreviewItems: InvoiceLineItem[] = catchUpSelectedInvoices.map((invoice) => ({
+    label: formatInvoicePeriodLabel(invoice),
+    period_start: invoice.week_start_date,
+    period_end: invoice.week_end_date,
+    gross_revenue: Number(invoice.total_gross_revenue ?? 0),
+    fee_amount: Number(invoice.fee_amount ?? 0),
+    source_invoice_id: invoice.id,
+    source_invoice_number: invoice.invoice_number,
+  }));
+  const catchUpSelectedTotalGross = catchUpPreviewItems.reduce((sum, item) => sum + Number(item.gross_revenue ?? 0), 0);
+  const catchUpSelectedTotalFee = catchUpPreviewItems.reduce((sum, item) => sum + Number(item.fee_amount ?? 0), 0);
+  const allEligibleCatchUpSelected =
+    catchUpEligibleInvoices.length > 0 &&
+    catchUpEligibleInvoices.every((invoice) => selectedCatchUpInvoiceIds.includes(invoice.id));
+  const isMaidstoneSite = useMemo(() => {
+    if (!franchisee) return false;
+    const location = (franchisee.location || '').toLowerCase();
+    const name = (franchisee.name || '').toLowerCase();
+    return location.includes('maidstone') || name.includes('maidstone');
+  }, [franchisee]);
   const maidstoneTrackerStartMonth = '2025-06';
   const maidstoneTrackerInitialArrears = 6500;
   const invoiceDebtSnapshots = useMemo(() => {
@@ -937,10 +989,52 @@ export default function FranchiseeDetailPage() {
     setReports((prev) => ({ ...prev, [invoiceId]: filtered }));
   };
 
+  const toggleCatchUpInvoiceSelection = (invoiceId: string) => {
+    setSelectedCatchUpInvoiceIds((current) =>
+      current.includes(invoiceId)
+        ? current.filter((id) => id !== invoiceId)
+        : [...current, invoiceId]
+    );
+  };
+
+  const toggleSelectAllCatchUpInvoices = () => {
+    setSelectedCatchUpInvoiceIds(
+      allEligibleCatchUpSelected ? [] : catchUpEligibleInvoices.map((invoice) => invoice.id)
+    );
+  };
+
+  const createCatchUpInvoice = async () => {
+    if (!id || catchUpSelectedInvoices.length === 0) return;
+    setCreatingCatchUpInvoice(true);
+    try {
+      const response = await fetch('/api/create-catch-up-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ franchiseeId: id, invoiceIds: catchUpSelectedInvoices.map((invoice) => invoice.id) }),
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.invoice?.id) {
+        alert(data.error || 'Failed to create catch-up invoice');
+        return;
+      }
+      await fetchInvoices();
+      setSelectedCatchUpInvoiceIds([]);
+      setShowCatchUpPreview(false);
+      setExpandedId(data.invoice.id);
+      await previewInvoicePdf(data.invoice.id);
+    } catch {
+      alert('Failed to create catch-up invoice');
+    } finally {
+      setCreatingCatchUpInvoice(false);
+    }
+  };
+
   const toggleExpand = (invoice: InvoiceWithFranchisee) => {
     if (expandedId === invoice.id) setExpandedId(null);
     else {
       setExpandedId(invoice.id);
+      if (Array.isArray(invoice.line_items) && invoice.line_items.length > 0) return;
       const isCombined = invoice.brands && invoice.brands.length > 0;
       fetchReports(
         invoice.id,
@@ -1831,7 +1925,14 @@ export default function FranchiseeDetailPage() {
             </div>
           )}
           <div className="mb-4 flex items-center justify-between">
-            <p className="text-sm text-slate-500 dark:text-neutral-400">Invoices for this franchisee</p>
+            <div>
+              <p className="text-sm text-slate-500 dark:text-neutral-400">Invoices for this franchisee</p>
+              {selectedCatchUpInvoiceIds.length > 0 && (
+                <p className="mt-1 text-xs text-slate-500 dark:text-neutral-400">
+                  {selectedCatchUpInvoiceIds.length} invoice{selectedCatchUpInvoiceIds.length === 1 ? '' : 's'} selected for a catch-up invoice.
+                </p>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               {franchisee.payment_model === 'monthly_fixed' && (
                 <>
@@ -1870,6 +1971,14 @@ export default function FranchiseeDetailPage() {
                   </button>
                 </>
               )}
+              <button
+                type="button"
+                onClick={() => setShowCatchUpPreview(true)}
+                disabled={selectedCatchUpInvoiceIds.length === 0}
+                className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+              >
+                Create catch-up invoice
+              </button>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as InvoiceStatus | 'all')}
@@ -1880,6 +1989,7 @@ export default function FranchiseeDetailPage() {
                 <option value="sent">Sent</option>
                 <option value="processing">Processing</option>
                 <option value="paid">Paid</option>
+                <option value="failed">Failed</option>
               </select>
             </div>
           </div>
@@ -1909,6 +2019,16 @@ export default function FranchiseeDetailPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-slate-100 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-700">
+                    <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
+                      <input
+                        type="checkbox"
+                        checked={allEligibleCatchUpSelected}
+                        onChange={toggleSelectAllCatchUpInvoices}
+                        disabled={catchUpEligibleInvoices.length === 0}
+                        aria-label="Select all eligible invoices for catch-up invoice"
+                        className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
+                      />
+                    </th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
                       Invoice
                     </th>
@@ -1942,6 +2062,21 @@ export default function FranchiseeDetailPage() {
                         key={invoice.id}
                         className="border-b border-slate-50 dark:border-neutral-600 transition-colors hover:bg-slate-50/50 dark:hover:bg-neutral-700/50"
                       >
+                        <td className="px-4 py-3.5 text-center">
+                          {invoice.status !== 'paid' &&
+                          invoice.status !== 'processing' &&
+                          (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0) ? (
+                            <input
+                              type="checkbox"
+                              checked={selectedCatchUpInvoiceIds.includes(invoice.id)}
+                              onChange={() => toggleCatchUpInvoiceSelection(invoice.id)}
+                              aria-label={`Select ${invoice.invoice_number} for catch-up invoice`}
+                              className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-300 dark:text-neutral-600">—</span>
+                          )}
+                        </td>
                         <td className="px-5 py-3.5">
                           <span className="text-sm font-semibold text-slate-900 dark:text-neutral-100">{invoice.invoice_number}</span>
                         </td>
@@ -2158,7 +2293,7 @@ export default function FranchiseeDetailPage() {
                       </tr>
                       {expandedId === invoice.id && (
                         <tr key={`${invoice.id}-detail`}>
-                          <td colSpan={8} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
+                          <td colSpan={9} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
                             <div className="rounded-lg bg-white dark:bg-neutral-800 p-4 shadow-sm">
                               {invoice.status === 'processing' && (
                                 <p className="mb-3 rounded-md bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
@@ -2189,9 +2324,51 @@ export default function FranchiseeDetailPage() {
                                 </p>
                               )}
                               <h4 className="mb-3 text-sm font-semibold text-slate-700 dark:text-neutral-200">
-                                {isMonthlyFixedSite ? 'Invoice summary' : 'Revenue breakdown'}
+                                {Array.isArray(invoice.line_items) && invoice.line_items.length > 0
+                                  ? 'Catch-up breakdown'
+                                  : isMonthlyFixedSite
+                                    ? 'Invoice summary'
+                                    : 'Revenue breakdown'}
                               </h4>
-                              {reports[invoice.id] ? (
+                              {Array.isArray(invoice.line_items) && invoice.line_items.length > 0 ? (
+                                <div className="space-y-2">
+                                  {invoice.line_items.map((item, idx) => (
+                                    <div
+                                      key={`${item.source_invoice_id ?? item.label}-${idx}`}
+                                      className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-neutral-700 px-4 py-2"
+                                    >
+                                      <div>
+                                        <p className="text-sm text-slate-700 dark:text-neutral-200">{item.label}</p>
+                                        {item.source_invoice_number && (
+                                          <p className="text-xs text-slate-500 dark:text-neutral-400">{item.source_invoice_number}</p>
+                                        )}
+                                      </div>
+                                      <div className="text-right">
+                                        <p className="text-sm font-semibold text-slate-900 dark:text-neutral-100">
+                                          {formatCurrency(item.fee_amount)}
+                                        </p>
+                                        <p className="text-xs text-slate-500 dark:text-neutral-400">
+                                          Gross {formatCurrency(item.gross_revenue)}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  ))}
+                                  <div className="mt-2 flex items-center justify-between border-t border-slate-200 dark:border-neutral-600 px-4 pt-3">
+                                    <span className="text-sm font-semibold text-slate-700 dark:text-neutral-200">Total gross revenue</span>
+                                    <span className="text-sm font-bold text-slate-900 dark:text-neutral-100">
+                                      {formatCurrency(invoice.total_gross_revenue)}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center justify-between px-4">
+                                    <span className="text-sm font-semibold text-primary-dark dark:text-primary-light">
+                                      Total amount due
+                                    </span>
+                                    <span className="text-sm font-bold text-primary-dark dark:text-primary-light">
+                                      {formatCurrency(invoice.fee_amount)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : reports[invoice.id] ? (
                                 <div className="space-y-2">
                                   {(() => {
                                     const normalizePlatformForDisplay = (p: string): Platform => {
@@ -2331,6 +2508,92 @@ export default function FranchiseeDetailPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {showCatchUpPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-neutral-800 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-neutral-700 px-6 py-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-neutral-100">Catch-up invoice preview</h3>
+                <p className="mt-1 text-sm text-slate-500 dark:text-neutral-400">
+                  Review the selected weeks before creating the draft invoice.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCatchUpPreview(false)}
+                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
+                aria-label="Close catch-up invoice preview"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
+              {catchUpPreviewItems.length === 0 ? (
+                <p className="text-sm text-slate-500 dark:text-neutral-400">Select one or more unpaid invoices first.</p>
+              ) : (
+                <div className="space-y-3">
+                  {catchUpPreviewItems.map((item, idx) => (
+                    <div
+                      key={`${item.source_invoice_id ?? item.label}-${idx}`}
+                      className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-neutral-700 px-4 py-3"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-slate-900 dark:text-neutral-100">{item.label}</p>
+                        {item.source_invoice_number && (
+                          <p className="text-xs text-slate-500 dark:text-neutral-400">{item.source_invoice_number}</p>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-slate-900 dark:text-neutral-100">
+                          {formatCurrency(item.fee_amount)}
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-neutral-400">
+                          Gross {formatCurrency(item.gross_revenue)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="rounded-lg border border-slate-200 dark:border-neutral-700 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-slate-700 dark:text-neutral-300">Total gross revenue</span>
+                      <span className="text-sm font-semibold text-slate-900 dark:text-neutral-100">
+                        {formatCurrency(catchUpSelectedTotalGross)}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-sm font-medium text-primary-dark dark:text-primary-light">Total amount due</span>
+                      <span className="text-base font-bold text-primary-dark dark:text-primary-light">
+                        {formatCurrency(catchUpSelectedTotalFee)}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-neutral-400">
+                    After creating the draft, the PDF preview will open so you can review it before sending.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3 border-t border-slate-200 dark:border-neutral-700 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setShowCatchUpPreview(false)}
+                className="rounded-lg border border-slate-300 dark:border-neutral-600 px-4 py-2 text-sm font-medium text-slate-700 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={createCatchUpInvoice}
+                disabled={catchUpPreviewItems.length === 0 || creatingCatchUpInvoice}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+              >
+                {creatingCatchUpInvoice ? 'Creating…' : 'Create draft invoice'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

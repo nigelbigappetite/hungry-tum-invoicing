@@ -3,6 +3,7 @@ import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { Resend } from 'resend';
+import Stripe from 'stripe';
 import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
 import { formatRecommendedBacsDateFromInvoiceDate, getSlerpPayoutDateForInvoiceWeek, getSlerpSalesPeriodEndForInvoiceWeek } from '@/lib/utils';
@@ -139,6 +140,62 @@ export async function POST(request: NextRequest) {
     const resend = new Resend(resendKey);
     const firstName = franchisee.name?.split(/\s+/)[0] || 'there';
     const filename = `${invoice.invoice_number}.pdf`;
+    const amountPence = Math.round(Number(invoice.fee_amount) * 100);
+    const baseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+      request.headers.get('origin') ||
+      'http://localhost:3000';
+    let paymentLinkHtml = '';
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (stripeSecretKey && amountPence >= 50 && invoice.status !== 'paid') {
+      try {
+        const stripe = new Stripe(stripeSecretKey);
+        const session = await stripe.checkout.sessions.create({
+          mode: 'payment',
+          payment_method_types: ['card'],
+          line_items: [
+            {
+              quantity: 1,
+              price_data: {
+                currency: 'gbp',
+                unit_amount: amountPence,
+                product_data: {
+                  name: `Invoice ${invoice.invoice_number}`,
+                  description: `Franchise fee invoice ${invoice.invoice_number}`,
+                },
+              },
+            },
+          ],
+          metadata: {
+            invoice_id: invoice.id,
+            invoice_number: invoice.invoice_number,
+          },
+          success_url: `${baseUrl}/invoices?paid=1&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${baseUrl}/invoices?canceled=1`,
+        });
+        if (session.url) {
+          paymentLinkHtml = `
+            <p>You can also pay instantly by card here:<br />
+            <a href="${session.url}">${session.url}</a></p>
+          `;
+        }
+      } catch (stripeError) {
+        console.warn('Failed to create Stripe payment link for invoice email:', stripeError);
+      }
+    }
+    const bankDetailsHtml =
+      paymentDetails.bankName || paymentDetails.sortCode || paymentDetails.accountNumber
+        ? `
+          <p>To pay by bank transfer, please use the following details:</p>
+          <p>
+            ${paymentDetails.bankName ? `Bank: ${paymentDetails.bankName}<br />` : ''}
+            ${paymentDetails.sortCode ? `Sort code: ${paymentDetails.sortCode}<br />` : ''}
+            ${paymentDetails.accountNumber ? `Account number: ${paymentDetails.accountNumber}<br />` : ''}
+            Reference: ${invoice.invoice_number}
+          </p>
+        `
+        : '';
     const { error: emailError } = await resend.emails.send({
       from: fromEmail,
       to: toEmail,
@@ -146,6 +203,8 @@ export async function POST(request: NextRequest) {
       html: `
         <p>Hi ${firstName},</p>
         <p>Please find your franchise fee invoice for the period ${invoice.week_start_date} to ${invoice.week_end_date} attached.</p>
+        ${bankDetailsHtml}
+        ${paymentLinkHtml}
         <p>If you have any questions, please get in touch.</p>
         <p>— Hungry Tum</p>
       `,

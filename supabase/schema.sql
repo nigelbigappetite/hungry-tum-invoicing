@@ -43,13 +43,19 @@ CREATE TABLE IF NOT EXISTS public.invoices (
   invoice_number text UNIQUE NOT NULL DEFAULT ('HT-' || EXTRACT(year FROM now())::text || '-' || lpad(nextval('invoice_number_seq')::text, 4, '0')),
   franchisee_id uuid NOT NULL REFERENCES public.franchisees(id) ON DELETE CASCADE,
   brand text,
+  brands text[] DEFAULT '{}',
+  source_invoice_ids uuid[],
+  line_items jsonb,
   week_start_date date NOT NULL,
   week_end_date date NOT NULL,
   total_gross_revenue numeric NOT NULL,
   fee_percentage numeric NOT NULL,
   fee_amount numeric NOT NULL,
-  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'processing', 'paid')),
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'processing', 'paid', 'failed')),
   pdf_path text,
+  payment_intent_id text,
+  payment_failure_reason text,
+  collect_from_date date,
   created_at timestamptz DEFAULT now()
 );
 
