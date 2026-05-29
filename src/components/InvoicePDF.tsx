@@ -6,7 +6,7 @@ import {
   Image,
   StyleSheet,
 } from '@react-pdf/renderer';
-import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, Platform, InvoiceLineItem } from '@/lib/types';
+import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, InvoiceLineItem, Platform } from '@/lib/types';
 import { getPlatformFeeRate } from '@/lib/utils';
 
 // Use built-in Helvetica so PDF generation works in Node (no font URL fetch)
@@ -205,10 +205,6 @@ interface InvoicePDFProps {
   invoice: Invoice;
   franchisee: Franchisee;
   reports: WeeklyReport[];
-  /** Slerp (Wing Shack Direct) reports for reference – payout date is Monday after invoice week. */
-  slerpReports?: WeeklyReport[];
-  /** Payout date for Slerp (yyyy-MM-dd) when slerpReports present. */
-  slerpPayoutDate?: string;
   paymentDetails?: InvoicePaymentDetails;
   /** When set, payment will be taken by BACS on this date; bank details are omitted. */
   bacsCollectionDate?: string;
@@ -220,17 +216,68 @@ interface InvoicePDFProps {
   businessAddressLines?: string[];
 }
 
-const AGGREGATOR_PLATFORMS = ['deliveroo', 'ubereats', 'justeat'] as const;
+const INVOICE_PLATFORMS = ['deliveroo', 'ubereats', 'justeat', 'slerp'] as const;
+type InvoicePlatform = (typeof INVOICE_PLATFORMS)[number];
 
-export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], slerpPayoutDate, paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
+function getInvoiceBrandFallback(invoice: Invoice): string | null {
+  const invoiceBrand = invoice.brand?.trim();
+  if (invoiceBrand) return invoiceBrand;
+  const brands = Array.isArray(invoice.brands) ? invoice.brands.map((b) => b.trim()).filter(Boolean) : [];
+  return brands.length === 1 ? brands[0] : null;
+}
+
+export default function InvoicePDF({ invoice, franchisee, reports, paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
   const payThem = franchisee.payment_direction === 'pay_them' && amountWePay != null;
   const showLogo = Boolean(logoPath?.trim());
-  const aggregatorReports = (reports || []).filter((r) => r && AGGREGATOR_PLATFORMS.includes(r.platform as typeof AGGREGATOR_PLATFORMS[number]));
+  const platformReports = (reports || []).filter((r) =>
+    r && INVOICE_PLATFORMS.includes(r.platform as typeof INVOICE_PLATFORMS[number])
+  );
+  const invoiceBrandFallback = getInvoiceBrandFallback(invoice);
+  const platformTotalsByBrand = new Map<string, { platform: InvoicePlatform; brand: string | null; gross: number }>();
+  platformReports.forEach((report) => {
+    const platform = report.platform as InvoicePlatform;
+    const brand = report.brand?.trim() || invoiceBrandFallback;
+    const key = `${platform}::${brand ?? ''}`;
+    const current = platformTotalsByBrand.get(key) ?? { platform, brand, gross: 0 };
+    current.gross += Number(report.gross_revenue ?? 0);
+    platformTotalsByBrand.set(key, current);
+  });
+  const platformsWithReports = new Set(platformReports.map((report) => report.platform));
+  INVOICE_PLATFORMS.forEach((platform) => {
+    if (platformsWithReports.has(platform)) return;
+    platformTotalsByBrand.set(`${platform}::${invoiceBrandFallback ?? ''}`, {
+      platform,
+      brand: invoiceBrandFallback,
+      gross: 0,
+    });
+  });
+  const platformTotals = Array.from(platformTotalsByBrand.values())
+    .sort((a, b) => {
+      const brandCompare = (a.brand ?? 'All brands').localeCompare(b.brand ?? 'All brands');
+      if (brandCompare !== 0) return brandCompare;
+      return INVOICE_PLATFORMS.indexOf(a.platform) - INVOICE_PLATFORMS.indexOf(b.platform);
+    })
+    .map((row) => {
+      const gross = Math.round(row.gross * 100) / 100;
+      const pct = getPlatformFeeRate(franchisee, row.platform as Platform);
+      const fee = Math.round(gross * (pct / 100) * 100) / 100;
+      return { ...row, gross, pct, fee };
+    });
+  const platformGrossTotal = Math.round(platformTotals.reduce((sum, row) => sum + row.gross, 0) * 100) / 100;
+  const platformFeeTotal = Math.round(platformTotals.reduce((sum, row) => sum + row.fee, 0) * 100) / 100;
   const catchUpLineItems = Array.isArray(invoice.line_items) ? invoice.line_items.filter(Boolean) as InvoiceLineItem[] : [];
   const isCatchUpInvoice = catchUpLineItems.length > 0;
   const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed';
   const isMaidstoneSite = ((franchisee.location || '').toLowerCase().includes('maidstone') || (franchisee.name || '').toLowerCase().includes('maidstone'));
   const periodLabel = `${formatDateStr(invoice.week_start_date)} - ${formatDateStr(invoice.week_end_date)}`;
+  const standardWeeklyFeeLabel =
+    franchisee.payment_model === 'percentage_per_platform'
+      ? 'Total franchise fee'
+      : `Total franchise fee (${invoice.fee_percentage}%)`;
+  const displayedInvoiceFeeAmount =
+    !isMonthlyFixedInvoice && !isCatchUpInvoice
+      ? platformFeeTotal
+      : Number(invoice.fee_amount ?? 0);
   let maidstoneWaivedAmount: number | null = null;
   let maidstoneBalanceAfter: number | null = null;
   let maidstoneAmountToPay: number | null = null;
@@ -253,11 +300,6 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   }
   const noPaymentRequired = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && maidstoneAmountToPay <= 0;
   const showMaidstoneWaiverFooter = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneWaivedAmount != null && maidstoneAmountToPay != null;
-  const hasSlerp = slerpReports.length > 0 && slerpPayoutDate;
-  const slerpGross = slerpReports.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
-  const slerpPct = franchisee.slerp_percentage != null ? Number(franchisee.slerp_percentage) : 0;
-  const slerpFee = Math.round(slerpGross * (slerpPct / 100) * 100) / 100;
-
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -408,7 +450,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           ) : (
             <>
               <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
-                Franchise fee – aggregator sales
+                Franchise fee – platform sales
               </Text>
               <View style={styles.tableHeader}>
                 <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>
@@ -422,23 +464,17 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 </Text>
               </View>
 
-              {aggregatorReports.map((report, idx) => {
-                const platform = (report?.platform as Platform) ?? 'deliveroo';
-                const gross = Number(report?.gross_revenue ?? 0);
-                const pct = getPlatformFeeRate(franchisee, platform);
-                const fee = Math.round(gross * (pct / 100) * 100) / 100;
+              {platformTotals.map((row) => {
                 return (
-                  <View key={report?.id ?? `report-${idx}`} style={styles.tableRow}>
+                  <View key={`platform-${row.platform}-${row.brand ?? 'all-brands'}`} style={styles.tableRow}>
                     <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
-                      {report?.brand?.trim()
-                        ? `${report.brand} – ${PLATFORM_LABELS[platform]}`
-                        : PLATFORM_LABELS[platform]}
+                      {`${row.brand ?? 'All brands'} – ${PLATFORM_LABELS[row.platform]}`}
                     </Text>
                     <Text style={{ ...styles.infoText, ...styles.colAmount, fontWeight: 600 }}>
-                      {formatGBP(gross)}
+                      {formatGBP(row.gross)}
                     </Text>
                     <Text style={{ ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c' }}>
-                      {pct}% · {formatGBP(fee)}
+                      {row.pct}% · {formatGBP(row.fee)}
                     </Text>
                   </View>
                 );
@@ -447,7 +483,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
               <View style={styles.totalRow}>
                 <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Total Gross Revenue</Text>
                 <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
-                  {formatGBP(aggregatorReports.reduce((sum, r) => sum + Number(r?.gross_revenue ?? 0), 0))}
+                  {formatGBP(platformGrossTotal)}
                 </Text>
                 <View style={styles.colFee} />
               </View>
@@ -468,7 +504,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   ? 'Total monthly franchise fee'
                   : isCatchUpInvoice
                     ? 'Total catch-up invoice'
-                  : `Total franchise fee (${invoice.fee_percentage}%)`}
+                  : standardWeeklyFeeLabel}
             </Text>
             <Text
               style={
@@ -477,7 +513,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   : styles.feeAmount
               }
             >
-              {formatGBP(invoice.fee_amount)}
+              {formatGBP(displayedInvoiceFeeAmount)}
             </Text>
           </View>
           {isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && (
@@ -490,35 +526,6 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             </View>
           )}
         </View>
-
-        {/* Block 2: Wing Shack Direct (Slerp) – paid to them, reference only */}
-        {hasSlerp && (
-          <View style={{ marginTop: 24 }}>
-            <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>Wing Shack Direct (Slerp)</Text>
-            <View style={styles.table}>
-              <View style={styles.tableHeader}>
-                <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>Description</Text>
-                <Text style={{ ...styles.tableHeaderText, ...styles.colAmount }}>Amount</Text>
-              </View>
-              {slerpReports.map((r, idx) => (
-                <View key={r?.id ?? `slerp-${idx}`} style={styles.tableRow}>
-                  <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
-                    {r?.brand?.trim() ? `${r.brand} – Direct (GMV)` : 'Direct sales (GMV)'}
-                  </Text>
-                  <Text style={{ ...styles.infoText, ...styles.colAmount, fontWeight: 600 }}>{formatGBP(r?.gross_revenue ?? 0)}</Text>
-                </View>
-              ))}
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total GMV</Text>
-                <Text style={styles.totalAmount}>{formatGBP(slerpGross)}</Text>
-              </View>
-              <View style={{ ...styles.feeRow, backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }}>
-                <Text style={{ ...styles.feeLabel, color: '#0369a1' }}>Fee ({slerpPct}%)</Text>
-                <Text style={{ ...styles.feeAmount, color: '#0369a1' }}>{formatGBP(slerpFee)}</Text>
-              </View>
-            </View>
-          </View>
-        )}
 
         {/* Payment / Direct debit */}
         <View style={styles.footer}>
