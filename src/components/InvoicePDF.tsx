@@ -246,15 +246,6 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
     current.gross += Number(report.gross_revenue ?? 0);
     platformTotalsByBrand.set(key, current);
   });
-  const platformsWithReports = new Set(platformReports.map((report) => report.platform));
-  INVOICE_PLATFORMS.forEach((platform) => {
-    if (platformsWithReports.has(platform)) return;
-    platformTotalsByBrand.set(`${platform}::${invoiceBrandFallback ?? ''}`, {
-      platform,
-      brand: invoiceBrandFallback,
-      gross: 0,
-    });
-  });
   const platformTotals = Array.from(platformTotalsByBrand.values())
     .sort((a, b) => {
       const brandCompare = (a.brand ?? 'All brands').localeCompare(b.brand ?? 'All brands');
@@ -266,7 +257,8 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
       const pct = getPlatformFeeRate(franchisee, row.platform as Platform);
       const fee = Math.round(gross * (pct / 100) * 100) / 100;
       return { ...row, gross, pct, fee };
-    });
+    })
+    .filter((row) => row.fee > 0);
   const platformGrossTotal = Math.round(platformTotals.reduce((sum, row) => sum + row.gross, 0) * 100) / 100;
   const platformFeeTotal = Math.round(platformTotals.reduce((sum, row) => sum + row.fee, 0) * 100) / 100;
   const catchUpLineItems = Array.isArray(invoice.line_items) ? invoice.line_items.filter(Boolean) as InvoiceLineItem[] : [];
