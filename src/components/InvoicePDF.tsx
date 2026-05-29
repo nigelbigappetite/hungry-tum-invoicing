@@ -205,6 +205,10 @@ interface InvoicePDFProps {
   invoice: Invoice;
   franchisee: Franchisee;
   reports: WeeklyReport[];
+  /** Slerp (Wing Shack Direct) reports passed by older invoice generation route versions. */
+  slerpReports?: WeeklyReport[];
+  /** Kept for compatibility with the invoice generation route; Slerp now renders in the main table. */
+  slerpPayoutDate?: string;
   paymentDetails?: InvoicePaymentDetails;
   /** When set, payment will be taken by BACS on this date; bank details are omitted. */
   bacsCollectionDate?: string;
@@ -226,10 +230,10 @@ function getInvoiceBrandFallback(invoice: Invoice): string | null {
   return brands.length === 1 ? brands[0] : null;
 }
 
-export default function InvoicePDF({ invoice, franchisee, reports, paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
+export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
   const payThem = franchisee.payment_direction === 'pay_them' && amountWePay != null;
   const showLogo = Boolean(logoPath?.trim());
-  const platformReports = (reports || []).filter((r) =>
+  const platformReports = [...(reports || []), ...(slerpReports || [])].filter((r) =>
     r && INVOICE_PLATFORMS.includes(r.platform as typeof INVOICE_PLATFORMS[number])
   );
   const invoiceBrandFallback = getInvoiceBrandFallback(invoice);
