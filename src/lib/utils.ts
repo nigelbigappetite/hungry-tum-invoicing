@@ -102,14 +102,16 @@ export function getUpcomingFridays(count = 5): { label: string; value: string }[
 }
 
 /**
- * Slerp: payout every Monday for the previous Tue–Mon sales period.
- * Returns the Monday (payout date) that ends the 7-day period containing the given fulfillment date.
+ * Slerp: payout every Monday for a Tue–Mon sales period, after 7 days maturity.
+ * For a fulfillment date, first find the Monday that ends its Tue–Mon sales period,
+ * then add 7 days to get the payout Monday.
  */
 export function getSlerpPayoutDateFromFulfillment(fulfillmentDate: Date): Date {
   const d = new Date(fulfillmentDate);
   const day = d.getDay(); // 0 = Sun, 1 = Mon, ...
   const daysUntilMonday = day === 1 ? 0 : (8 - day) % 7;
-  return addDays(d, daysUntilMonday);
+  const salesPeriodEndMonday = addDays(d, daysUntilMonday);
+  return addDays(salesPeriodEndMonday, 7);
 }
 
 /**

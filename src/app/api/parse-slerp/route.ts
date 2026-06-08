@@ -10,12 +10,20 @@ export const runtime = 'nodejs';
  * We match if either string contains the other, or if the part after " - " in the franchisee location equals the file location.
  */
 function locationMatchesFile(franchiseeLocation: string, fileLocation: string): boolean {
-  const a = franchiseeLocation.trim().toLowerCase();
-  const b = fileLocation.trim().toLowerCase();
+  const normalize = (s: string) =>
+    s
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, ' ');
+
+  const a = normalize(franchiseeLocation);
+  const b = normalize(fileLocation);
   if (!a || !b) return false;
   if (b.includes(a) || a.includes(b)) return true;
-  // Spreadsheet has "Loughton", franchisee may have "Wing Shack Co- Loughton" – compare to suffix after " - "
-  const suffix = a.includes(' - ') ? a.split(' - ').pop()?.trim() ?? '' : '';
+  // Spreadsheet has "Loughton", franchisee may have "Wing Shack Co- Loughton" – compare to suffix after hyphen.
+  const hyphenParts = a.split('-').map((p) => p.trim()).filter(Boolean);
+  const suffix = hyphenParts.length > 1 ? hyphenParts[hyphenParts.length - 1] : '';
   return suffix === b || !!(suffix && b.includes(suffix));
 }
 
@@ -67,6 +75,16 @@ export async function POST(request: NextRequest) {
     const filtered: SlerpParsedRow[] = payWeeks.filter((row) =>
       locationMatchesFile(franchiseeLocation, row.location)
     );
+
+    if (filtered.length === 0) {
+      const locationsInFile = [...new Set(payWeeks.map((row) => row.location))];
+      return NextResponse.json(
+        {
+          error: `No matching Slerp rows found for location "${franchiseeLocation}". Locations in file: ${locationsInFile.join(', ') || 'none'}.`,
+        },
+        { status: 400 }
+      );
+    }
 
     const feePct = Number(franchisee.slerp_percentage) || 0;
     const preview = filtered.map((row) => ({

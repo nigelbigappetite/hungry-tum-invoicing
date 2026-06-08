@@ -103,7 +103,7 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   deliveroo: 'Deliveroo',
   ubereats: 'Uber Eats',
   justeat: 'Just Eat',
-  slerp: 'Slerp (Direct)',
+  slerp: 'Wing Shack Direct',
 };
 
 /** Platforms that use the standard report upload (CSV/PDF). Slerp uses a separate xlsx upload. */

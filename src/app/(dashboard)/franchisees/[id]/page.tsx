@@ -24,8 +24,6 @@ import {
   formatRecommendedBacsDateFromInvoiceDate,
   getUpcomingFridays,
   getPlatformFeeRate,
-  getSlerpSalesPeriodEndForInvoiceWeek,
-  getWeekRangeFromDate,
   cn,
 } from '@/lib/utils';
 import {
@@ -34,7 +32,7 @@ import {
   sumRevenueRowsForExtendedInvoice,
 } from '@/lib/monthly-invoice-revenue';
 import { getPlatformLogo, getBrandLogo } from '@/lib/logos';
-import { startOfWeek, endOfWeek, format, addDays, parseISO } from 'date-fns';
+import { startOfWeek, endOfWeek, format, parseISO } from 'date-fns';
 import FileUpload from '@/components/FileUpload';
 import {
   AlertCircle,
@@ -181,6 +179,15 @@ export default function FranchiseeDetailPage() {
   const [manualAddAmount, setManualAddAmount] = useState('');
   const [manualAddSaving, setManualAddSaving] = useState(false);
   const [manualAddError, setManualAddError] = useState('');
+  const [manualWeekInputs, setManualWeekInputs] = useState<Record<Platform, string>>({
+    deliveroo: '',
+    ubereats: '',
+    justeat: '',
+    slerp: '',
+  });
+  const [manualWeekSaving, setManualWeekSaving] = useState(false);
+  const [manualWeekError, setManualWeekError] = useState('');
+  const [manualWeekSuccess, setManualWeekSuccess] = useState(false);
 
   // Platform revenue for metrics (all time)
   const [platformRevenue, setPlatformRevenue] = useState<Record<Platform, number>>({
@@ -193,12 +200,15 @@ export default function FranchiseeDetailPage() {
 
   // Slerp upload (Wing Shack Direct)
   type SlerpPreviewRow = { weekStart: string; weekEnd: string; payoutDate: string; grossRevenue: number; feePercentage: number; feeAmount: number };
+  type ComputedSlerpPreviewRow = SlerpPreviewRow & { payoutAmount: number; invoiceGrossRevenue: number; invoiceFeeAmount: number };
   const [slerpFile, setSlerpFile] = useState<File | null>(null);
   const [slerpPreview, setSlerpPreview] = useState<SlerpPreviewRow[]>([]);
+  const [slerpUseStripePayoutTruth, setSlerpUseStripePayoutTruth] = useState(true);
   const [slerpParsing, setSlerpParsing] = useState(false);
   const [slerpSaving, setSlerpSaving] = useState(false);
   const [slerpError, setSlerpError] = useState('');
   const [slerpSuccess, setSlerpSuccess] = useState(false);
+  const [savedSlerpForSelectedWeek, setSavedSlerpForSelectedWeek] = useState<{ gross: number; fee: number } | null>(null);
   const slerpBrand = 'Wing Shack';
 
   const fetchFranchisee = useCallback(async () => {
@@ -268,7 +278,6 @@ export default function FranchiseeDetailPage() {
       .select('brand, brands, week_start_date, week_end_date')
       .eq('franchisee_id', id);
     const weekKeys = new Set<string>();
-    const slerpWeekKeys = new Set<string>();
     const extendedInvoiceRanges: Array<{ week_start_date: string; week_end_date: string }> = [];
     (invoiceWeeks || []).forEach(
       (r: {
@@ -288,9 +297,6 @@ export default function FranchiseeDetailPage() {
           r.brands && r.brands.length > 0 ? r.brands : r.brand?.trim() ? [r.brand.trim()] : [];
         brandsList.forEach((brand) => {
           weekKeys.add(`${brand}|${r.week_start_date}|${r.week_end_date}`);
-          const slerpWeekEnd = getSlerpSalesPeriodEndForInvoiceWeek(r.week_end_date);
-          const slerpWeekStart = format(addDays(parseISO(slerpWeekEnd), -6), 'yyyy-MM-dd');
-          slerpWeekKeys.add(`${brand}|${slerpWeekStart}|${slerpWeekEnd}`);
         });
       }
     );
@@ -317,11 +323,10 @@ export default function FranchiseeDetailPage() {
     };
     (reportRows || []).forEach((row: { platform: string; gross_revenue: number; brand?: string | null; week_start_date: string; week_end_date: string }) => {
       const key = `${(row.brand ?? '').trim()}|${row.week_start_date}|${row.week_end_date}`;
-      const isSlerp = normalizePlatform(row.platform) === 'slerp';
       const matchesExtendedInvoice = extendedInvoiceRanges.some((invoice) =>
         reportFallsInExtendedInvoiceRange(row.week_end_date, invoice)
       );
-      const matchesInvoice = matchesExtendedInvoice || (isSlerp ? slerpWeekKeys.has(key) : weekKeys.has(key));
+      const matchesInvoice = matchesExtendedInvoice || weekKeys.has(key);
       if (!matchesInvoice) return;
       const platformKey = normalizePlatform(row.platform);
       if (platformKey) sums[platformKey] += Number(row.gross_revenue) || 0;
@@ -337,6 +342,49 @@ export default function FranchiseeDetailPage() {
   useEffect(() => {
     fetchInvoices();
   }, [fetchInvoices]);
+
+  useEffect(() => {
+    const fetchSavedSlerpForSelectedWeek = async () => {
+      if (!id || !franchisee || franchisee.slerp_percentage == null) {
+        setSavedSlerpForSelectedWeek(null);
+        return;
+      }
+      const currentWeekEnd = format(
+        endOfWeek(new Date(weekDate), { weekStartsOn: 1 }),
+        'yyyy-MM-dd'
+      );
+      const currentWeekStart = format(
+        startOfWeek(new Date(weekDate), { weekStartsOn: 1 }),
+        'yyyy-MM-dd'
+      );
+      const { data, error } = await supabase
+        .from('weekly_reports')
+        .select('gross_revenue')
+        .eq('franchisee_id', id)
+        .eq('platform', 'slerp')
+        .eq('week_start_date', currentWeekStart)
+        .eq('week_end_date', currentWeekEnd)
+        .eq('brand', slerpBrand);
+      if (error) {
+        setSavedSlerpForSelectedWeek(null);
+        return;
+      }
+      const gross = Math.round(
+        ((data || []) as Array<{ gross_revenue: number | null }>).reduce(
+          (sum, row) => sum + Number(row.gross_revenue || 0),
+          0
+        ) * 100
+      ) / 100;
+      if (gross <= 0) {
+        setSavedSlerpForSelectedWeek(null);
+        return;
+      }
+      const pct = getPlatformFeeRate(franchisee, 'slerp');
+      const fee = Math.round(gross * (pct / 100) * 100) / 100;
+      setSavedSlerpForSelectedWeek({ gross, fee });
+    };
+    fetchSavedSlerpForSelectedWeek();
+  }, [id, franchisee, supabase, weekDate]);
 
   useEffect(() => {
     setSelectedCatchUpInvoiceIds((current) =>
@@ -510,6 +558,62 @@ export default function FranchiseeDetailPage() {
   const weekEnd = endOfWeek(new Date(weekDate), { weekStartsOn: 1 });
   const weekStartStr = format(weekStart, 'yyyy-MM-dd');
   const weekEndStr = format(weekEnd, 'yyyy-MM-dd');
+  useEffect(() => {
+    const loadManualWeekDefaults = async () => {
+      if (!id) return;
+      const { data, error } = await supabase
+        .from('weekly_reports')
+        .select('platform, gross_revenue')
+        .eq('franchisee_id', id)
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr)
+        .in('platform', ['deliveroo', 'ubereats', 'justeat', 'slerp']);
+      if (error) return;
+      const by: Record<Platform, number> = { deliveroo: 0, ubereats: 0, justeat: 0, slerp: 0 };
+      (data || []).forEach((r: { platform: string; gross_revenue: number | null }) => {
+        if (r.platform in by) {
+          by[r.platform as Platform] += Number(r.gross_revenue || 0);
+        }
+      });
+      setManualWeekInputs({
+        deliveroo: by.deliveroo ? String(Math.round(by.deliveroo * 100) / 100) : '',
+        ubereats: by.ubereats ? String(Math.round(by.ubereats * 100) / 100) : '',
+        justeat: by.justeat ? String(Math.round(by.justeat * 100) / 100) : '',
+        slerp: by.slerp ? String(Math.round(by.slerp * 100) / 100) : '',
+      });
+    };
+    loadManualWeekDefaults();
+  }, [id, supabase, weekStartStr, weekEndStr]);
+  const selectedSlerpSalesPeriodStart = weekStartStr;
+  const selectedSlerpSalesPeriodEnd = weekEndStr;
+  const computedSlerpPreview: ComputedSlerpPreviewRow[] = useMemo(() => {
+    const pct = getPlatformFeeRate(franchisee, 'slerp');
+    const franchiseeSharePct = Math.max(0, 100 - pct);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    return slerpPreview.map((p) => {
+      const payoutAmount = Number(p.grossRevenue || 0);
+      if (slerpUseStripePayoutTruth && franchiseeSharePct > 0) {
+        const invoiceGrossRevenue = round2(payoutAmount / (franchiseeSharePct / 100));
+        const invoiceFeeAmount = round2(invoiceGrossRevenue * (pct / 100));
+        return { ...p, payoutAmount, invoiceGrossRevenue, invoiceFeeAmount };
+      }
+      const invoiceGrossRevenue = round2(payoutAmount);
+      const invoiceFeeAmount = round2(invoiceGrossRevenue * (pct / 100));
+      return { ...p, payoutAmount, invoiceGrossRevenue, invoiceFeeAmount };
+    });
+  }, [franchisee, slerpPreview, slerpUseStripePayoutTruth]);
+  const slerpPreviewForSelectedWeek =
+    computedSlerpPreview.find(
+      (p) =>
+        p.weekStart === selectedSlerpSalesPeriodStart &&
+        p.weekEnd === selectedSlerpSalesPeriodEnd
+    ) ?? null;
+  const slerpReviewGross = slerpPreviewForSelectedWeek
+    ? Number(slerpPreviewForSelectedWeek.invoiceGrossRevenue || 0)
+    : Number(savedSlerpForSelectedWeek?.gross || 0);
+  const slerpReviewFee = slerpPreviewForSelectedWeek
+    ? Number(slerpPreviewForSelectedWeek.invoiceFeeAmount || 0)
+    : Number(savedSlerpForSelectedWeek?.fee || 0);
   const rowsWithData = uploadRows.filter((r) => r.result !== null);
   const totalGross = rowsWithData.reduce((sum, r) => {
     const bd = getDeliverooBreakdown(r);
@@ -535,6 +639,8 @@ export default function FranchiseeDetailPage() {
           ) * 100
         ) / 100
       : Math.round(totalGross * (feeRate / 100) * 100) / 100;
+  const reviewTotalGross = Math.round((totalGross + slerpReviewGross) * 100) / 100;
+  const reviewFeeAmount = Math.round((feeAmount + slerpReviewFee) * 100) / 100;
 
   // Metrics (from all invoices + platform revenue)
   const totalGrossRevenue = invoices.reduce((s, i) => s + Number(i.total_gross_revenue || 0), 0);
@@ -758,14 +864,24 @@ export default function FranchiseeDetailPage() {
         ),
       ].filter(Boolean).filter((b) => !franchiseeBrands || franchiseeBrands.includes(b as string));
 
-      // One combined Hungry Tum invoice per franchisee per week (all brands)
-      const { data: allReports } = await supabase
-        .from('weekly_reports')
-        .select('platform, gross_revenue')
-        .eq('franchisee_id', id)
-        .eq('week_start_date', weekStartStr)
-        .eq('week_end_date', weekEndStr)
-        .in('platform', ['deliveroo', 'ubereats', 'justeat']);
+      // One combined Hungry Tum invoice per franchisee per week (all brands), including Wing Shack Direct.
+      const [aggregatorReportsRes, slerpReportsRes] = await Promise.all([
+        supabase
+          .from('weekly_reports')
+          .select('platform, gross_revenue')
+          .eq('franchisee_id', id)
+          .eq('week_start_date', weekStartStr)
+          .eq('week_end_date', weekEndStr)
+          .in('platform', ['deliveroo', 'ubereats', 'justeat']),
+        supabase
+          .from('weekly_reports')
+          .select('platform, gross_revenue')
+          .eq('franchisee_id', id)
+          .eq('platform', 'slerp')
+          .eq('week_start_date', weekStartStr)
+          .eq('week_end_date', weekEndStr),
+      ]);
+      const allReports = [...(aggregatorReportsRes.data || []), ...(slerpReportsRes.data || [])];
       const totalGrossAll =
         (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
       const totalFeeAll =
@@ -875,10 +991,18 @@ export default function FranchiseeDetailPage() {
         .eq('week_start_date', weekStartStr)
         .eq('week_end_date', weekEndStr)
         .in('platform', ['deliveroo', 'ubereats', 'justeat']);
-      const totalGrossAll = (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
+      const { data: slerpReports } = await supabase
+        .from('weekly_reports')
+        .select('platform, gross_revenue')
+        .eq('franchisee_id', id)
+        .eq('platform', 'slerp')
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr);
+      const combinedReports = [...(allReports || []), ...(slerpReports || [])];
+      const totalGrossAll = combinedReports.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
       const totalFeeAll =
         franchisee.payment_model === 'percentage_per_platform'
-          ? (allReports || []).reduce(
+          ? combinedReports.reduce(
               (s, r) =>
                 s +
                 Math.round(Number(r.gross_revenue ?? 0) * (getPlatformFeeRate(franchisee, r.platform) / 100) * 100) / 100,
@@ -937,6 +1061,139 @@ export default function FranchiseeDetailPage() {
     }
   };
 
+  const recalculateInvoiceForWeek = async (weekStartStr: string, weekEndStr: string) => {
+    if (!id || !franchisee) return;
+
+    const [aggregatorReportsRes, slerpReportsRes, invoicesRes] = await Promise.all([
+      supabase
+        .from('weekly_reports')
+        .select('platform, gross_revenue')
+        .eq('franchisee_id', id)
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr)
+        .in('platform', ['deliveroo', 'ubereats', 'justeat']),
+      supabase
+        .from('weekly_reports')
+        .select('platform, gross_revenue')
+        .eq('franchisee_id', id)
+        .eq('platform', 'slerp')
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr),
+      supabase
+        .from('invoices')
+        .select('id')
+        .eq('franchisee_id', id)
+        .eq('week_start_date', weekStartStr)
+        .eq('week_end_date', weekEndStr)
+        .order('created_at', { ascending: true }),
+    ]);
+
+    const allReports = [...(aggregatorReportsRes.data || []), ...(slerpReportsRes.data || [])];
+    const totalGrossAll = allReports.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
+    const totalFeeAll =
+      franchisee.payment_model === 'percentage_per_platform'
+        ? allReports.reduce(
+            (s, r) =>
+              s +
+              Math.round(Number(r.gross_revenue ?? 0) * (getPlatformFeeRate(franchisee, r.platform) / 100) * 100) /
+                100,
+            0
+          )
+        : Math.round(totalGrossAll * ((franchisee.percentage_rate ?? 6) / 100) * 100) / 100;
+
+    const roundedGross = Math.round(totalGrossAll * 100) / 100;
+    const roundedFee = Math.round(totalFeeAll * 100) / 100;
+    const effectivePct =
+      roundedGross > 0 ? Math.round((roundedFee / roundedGross) * 10000) / 100 : (franchisee.percentage_rate ?? 6);
+
+    const existingInvoices = invoicesRes.data || [];
+    if (existingInvoices.length === 0) {
+      // If no weekly invoice exists yet, create one so Slerp-only weeks are fully allocatable.
+      if (roundedGross <= 0) return;
+      const franchiseeBrands = Array.isArray(franchisee.brands) && franchisee.brands.length > 0
+        ? franchisee.brands
+        : null;
+      const invoiceBrands = franchiseeBrands && franchiseeBrands.includes(slerpBrand) ? [slerpBrand] : null;
+      await supabase.from('invoices').insert({
+        franchisee_id: id,
+        brand: null,
+        brands: invoiceBrands,
+        week_start_date: weekStartStr,
+        week_end_date: weekEndStr,
+        total_gross_revenue: roundedGross,
+        fee_percentage: effectivePct,
+        fee_amount: roundedFee,
+        status: 'draft',
+      });
+      return;
+    }
+
+    const invoiceToKeep = existingInvoices[0];
+    const duplicates = existingInvoices.slice(1);
+    for (const inv of duplicates) {
+      await supabase.from('invoices').delete().eq('id', inv.id);
+    }
+
+    await supabase
+      .from('invoices')
+      .update({
+        total_gross_revenue: roundedGross,
+        fee_percentage: effectivePct,
+        fee_amount: roundedFee,
+      })
+      .eq('id', invoiceToKeep.id);
+  };
+
+  const saveManualWeekFigures = async () => {
+    if (!id) return;
+    setManualWeekSaving(true);
+    setManualWeekError('');
+    try {
+      const entries: Array<{ platform: Platform; amount: number }> = (['deliveroo', 'ubereats', 'justeat', 'slerp'] as Platform[]).map((platform) => {
+        const raw = manualWeekInputs[platform] ?? '';
+        const amount = parseFloat(raw.replace(/[£,\s]/g, ''));
+        return { platform, amount: Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0 };
+      });
+
+      for (const { platform, amount } of entries) {
+        const { error: deleteErr } = await supabase
+          .from('weekly_reports')
+          .delete()
+          .eq('franchisee_id', id)
+          .eq('week_start_date', weekStartStr)
+          .eq('week_end_date', weekEndStr)
+          .eq('platform', platform);
+        if (deleteErr) throw deleteErr;
+
+        const manualBrand =
+          platform === 'slerp'
+            ? slerpBrand
+            : franchisee?.brands?.[0] ?? slerpBrand;
+        const { error: insertErr } = await supabase.from('weekly_reports').insert({
+          franchisee_id: id,
+          brand: manualBrand,
+          platform,
+          week_start_date: weekStartStr,
+          week_end_date: weekEndStr,
+          gross_revenue: amount,
+          file_path: null,
+          file_type: 'manual' as const,
+        });
+        if (insertErr) throw insertErr;
+      }
+
+      await recalculateInvoiceForWeek(weekStartStr, weekEndStr);
+      fetchInvoices();
+      fetchPlatformRevenue();
+      setManualWeekSuccess(true);
+      setTimeout(() => setManualWeekSuccess(false), 2500);
+    } catch (err) {
+      setManualWeekError(err instanceof Error ? err.message : 'Failed to save manual figures');
+    } finally {
+      setManualWeekSaving(false);
+    }
+  };
+
   const handleSaveSlerpReports = async () => {
     if (!id || slerpPreview.length === 0) return;
     setSlerpSaving(true);
@@ -948,11 +1205,25 @@ export default function FranchiseeDetailPage() {
         body: JSON.stringify({
           franchiseeId: id,
           brand: slerpBrand,
+          sourceMode: slerpUseStripePayoutTruth ? 'stripe_payout_72' : 'invoice_gross',
           payWeeks: slerpPreview.map((p) => ({ weekStart: p.weekStart, weekEnd: p.weekEnd, grossRevenue: p.grossRevenue })),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Save failed');
+
+      const impactedWeeks = [
+        ...new Set(
+          slerpPreview.map((p) => `${p.weekStart}|${p.weekEnd}`)
+        ),
+      ];
+      await Promise.all(
+        impactedWeeks.map((k) => {
+          const [weekStart, weekEnd] = k.split('|');
+          return recalculateInvoiceForWeek(weekStart, weekEnd);
+        })
+      );
+
       setSlerpSuccess(true);
       setSlerpPreview([]);
       setSlerpFile(null);
@@ -1721,12 +1992,76 @@ export default function FranchiseeDetailPage() {
             </div>
           </div>
 
+          <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
+            <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-neutral-100">Manual weekly figures</h2>
+            <p className="mb-4 text-sm text-slate-500 dark:text-neutral-400">
+              Edit gross revenue for any platform for this week. Existing values are pre-filled; if you leave a value unchanged it stays unchanged.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(['deliveroo', 'ubereats', 'justeat', 'slerp'] as Platform[]).map((platform) => (
+                <label key={`manual-week-${platform}`} className="rounded-lg border border-slate-200 dark:border-neutral-600 p-3">
+                  <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">
+                    {PLATFORM_LABELS[platform]}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-slate-500 dark:text-neutral-400">£</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={manualWeekInputs[platform]}
+                      onChange={(e) => {
+                        setManualWeekInputs((prev) => ({ ...prev, [platform]: e.target.value }));
+                        setManualWeekError('');
+                      }}
+                      className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-xs text-slate-500 dark:text-neutral-400">
+                    <span>Fee ({getPlatformFeeRate(franchisee, platform)}%)</span>
+                    <span>
+                      {formatCurrency(
+                        Math.round(
+                          (parseFloat((manualWeekInputs[platform] || '0').replace(/[£,\s]/g, '')) || 0) *
+                            (getPlatformFeeRate(franchisee, platform) / 100) *
+                            100
+                        ) / 100
+                      )}
+                    </span>
+                  </div>
+                </label>
+              ))}
+            </div>
+            {manualWeekError && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{manualWeekError}</p>}
+            {manualWeekSuccess && <p className="mt-3 text-sm text-green-600 dark:text-green-400">Manual figures saved and invoice updated.</p>}
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={saveManualWeekFigures}
+                disabled={manualWeekSaving}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+              >
+                {manualWeekSaving ? 'Saving…' : 'Save manual figures for this week'}
+              </button>
+            </div>
+          </div>
+
           {franchisee?.slerp_percentage != null && franchisee.brands?.includes('Wing Shack') && (
             <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
-              <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-neutral-100">Wing Shack Direct (Slerp)</h2>
+              <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-neutral-100">Wing Shack Direct</h2>
               <p className="mb-3 text-sm text-slate-500 dark:text-neutral-400">
-                Upload the full Slerp statement (xlsx). Only <strong>{franchisee?.location ?? 'this location'}</strong> sales are used; the spreadsheet has all locations. Saved data appears on the invoice PDF in the Slerp block when the pay week matches the invoice week.
+                Upload the full Slerp statement (xlsx). Only <strong>{franchisee?.location ?? 'this location'}</strong> sales are used; the spreadsheet has all locations. Use Stripe payout truth to convert 72% payout into invoice gross and 28% fee.
               </p>
+              <label className="mb-3 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={slerpUseStripePayoutTruth}
+                  onChange={(e) => setSlerpUseStripePayoutTruth(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
+                />
+                Use Stripe payout as source of truth (assumes payout is franchisee share, e.g. 72%)
+              </label>
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-700 px-4 py-2 text-sm font-medium text-slate-700 dark:text-neutral-200 hover:bg-slate-100 dark:hover:bg-neutral-600">
                   <Upload className="h-4 w-4" />
@@ -1759,17 +2094,21 @@ export default function FranchiseeDetailPage() {
                       <tr className="border-b border-slate-200 dark:border-neutral-600 text-left">
                         <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400">Sales period</th>
                         <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400">Payout date</th>
-                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">Gross (GMV)</th>
+                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">
+                          {slerpUseStripePayoutTruth ? 'Stripe payout (franchisee share)' : 'Net payable'}
+                        </th>
+                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">Invoice gross revenue</th>
                         <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">Fee ({franchisee.slerp_percentage}%)</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {slerpPreview.map((p, i) => (
+                      {computedSlerpPreview.map((p, i) => (
                         <tr key={i} className="border-b border-slate-100 dark:border-neutral-700">
                           <td className="py-2 pr-4 text-slate-700 dark:text-neutral-300">{formatDate(p.weekStart)} – {formatDate(p.weekEnd)}</td>
                           <td className="py-2 pr-4 text-slate-700 dark:text-neutral-300">{formatDate(p.payoutDate)}</td>
-                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.grossRevenue)}</td>
-                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.feeAmount)}</td>
+                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.payoutAmount)}</td>
+                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.invoiceGrossRevenue)}</td>
+                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.invoiceFeeAmount)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1779,7 +2118,7 @@ export default function FranchiseeDetailPage() {
             </div>
           )}
 
-          {rowsWithData.length > 0 && isPercentageBased && (
+          {(rowsWithData.length > 0 || slerpReviewGross > 0) && isPercentageBased && (
             <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
               <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-neutral-100">Review & confirm</h2>
               <div className="space-y-3">
@@ -1821,8 +2160,18 @@ export default function FranchiseeDetailPage() {
                     </div>
                   );
                 })}
+                {slerpReviewGross > 0 && (
+                  <div className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
+                    <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
+                      {slerpBrand} · {PLATFORM_LABELS.slerp}
+                    </span>
+                    <span className="text-sm font-medium text-slate-900 dark:text-neutral-100">
+                      {formatCurrency(slerpReviewGross)}
+                    </span>
+                  </div>
+                )}
                 {/* Per-platform fee breakdown */}
-                {franchisee.payment_model === 'percentage_per_platform' && rowsWithData.length > 0 && (
+                {franchisee.payment_model === 'percentage_per_platform' && (rowsWithData.length > 0 || slerpReviewGross > 0) && (
                   <div className="rounded-lg border border-slate-200 dark:border-neutral-600 bg-slate-50/50 dark:bg-neutral-700/50 p-3">
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-neutral-400">Fee breakdown by platform</p>
                     <ul className="space-y-1.5">
@@ -1842,19 +2191,27 @@ export default function FranchiseeDetailPage() {
                           </li>
                         );
                       })}
+                      {slerpReviewGross > 0 && (
+                        <li className="flex items-center justify-between text-sm">
+                          <span className="text-slate-600 dark:text-neutral-300">
+                            {PLATFORM_LABELS.slerp} ({getPlatformFeeRate(franchisee, 'slerp')}%)
+                          </span>
+                          <span className="font-medium text-slate-900 dark:text-neutral-100">{formatCurrency(slerpReviewFee)}</span>
+                        </li>
+                      )}
                     </ul>
                   </div>
                 )}
                 <div className="border-t border-slate-200 dark:border-neutral-600 pt-3">
                   <div className="flex items-center justify-between rounded-lg bg-slate-100 dark:bg-neutral-700 p-3">
                     <span className="text-sm font-semibold text-slate-700 dark:text-neutral-200">Total gross revenue</span>
-                    <span className="text-lg font-bold text-slate-900 dark:text-neutral-100">{formatCurrency(totalGross)}</span>
+                    <span className="text-lg font-bold text-slate-900 dark:text-neutral-100">{formatCurrency(reviewTotalGross)}</span>
                   </div>
                   <div className="mt-2 flex items-center justify-between rounded-lg bg-primary/10 dark:bg-primary/20 p-3">
                     <span className="text-sm font-semibold text-primary-dark dark:text-primary-light">
                       Fee{franchisee.payment_model === 'percentage_per_platform' ? ' (per platform)' : ` (${feeRate}%)`}
                     </span>
-                    <span className="text-lg font-bold text-primary-dark dark:text-primary-light">{formatCurrency(feeAmount)}</span>
+                    <span className="text-lg font-bold text-primary-dark dark:text-primary-light">{formatCurrency(reviewFeeAmount)}</span>
                   </div>
                 </div>
               </div>

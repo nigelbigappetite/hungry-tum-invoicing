@@ -46,7 +46,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   deliveroo: 'Deliveroo',
   ubereats: 'Uber Eats',
   justeat: 'Just Eat',
-  slerp: 'Direct (Slerp)',
+  slerp: 'Wing Shack Direct',
 };
 
 const PLATFORM_COLORS: Record<string, string> = {

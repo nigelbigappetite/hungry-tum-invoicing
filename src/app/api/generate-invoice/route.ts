@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
-import { formatRecommendedBacsDateFromInvoiceDate, formatWeekRange, getSlerpPayoutDateForInvoiceWeek, getSlerpSalesPeriodEndForInvoiceWeek } from '@/lib/utils';
+import { formatRecommendedBacsDateFromInvoiceDate, formatWeekRange } from '@/lib/utils';
 import { createElement } from 'react';
 import { isExtendedInvoiceRange } from '@/lib/monthly-invoice-revenue';
 
@@ -40,34 +40,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Franchisee not found' }, { status: 404 });
     }
 
-    // Fetch aggregator weekly reports for this invoice period (Mon–Sun). Combined invoice: no brand filter.
-    let reportsQuery = supabase
+    // Fetch weekly reports for this invoice period (Mon–Sun). Combined invoice: no brand filter.
+    let aggregatorReportsQuery = supabase
       .from('weekly_reports')
       .select('*')
       .eq('franchisee_id', invoice.franchisee_id)
       .in('platform', ['deliveroo', 'ubereats', 'justeat']);
     if (isExtendedInvoiceRange(invoice.week_start_date, invoice.week_end_date)) {
-      reportsQuery = reportsQuery
+      aggregatorReportsQuery = aggregatorReportsQuery
         .gte('week_end_date', invoice.week_start_date)
         .lte('week_end_date', invoice.week_end_date);
     } else {
-      reportsQuery = reportsQuery
+      aggregatorReportsQuery = aggregatorReportsQuery
         .eq('week_start_date', invoice.week_start_date)
         .eq('week_end_date', invoice.week_end_date);
     }
     const isCombinedInvoice = invoice.brands && Array.isArray(invoice.brands) && invoice.brands.length > 0;
     if (!isCombinedInvoice && invoice.brand?.trim()) {
-      reportsQuery = reportsQuery.eq('brand', invoice.brand.trim());
+      aggregatorReportsQuery = aggregatorReportsQuery.eq('brand', invoice.brand.trim());
     }
-    const { data: reports, error: reportsError } = await reportsQuery.order('platform');
+    const { data: aggregatorReports, error: reportsError } = await aggregatorReportsQuery.order('platform');
 
     if (reportsError) {
       return NextResponse.json({ error: 'Failed to fetch reports' }, { status: 500 });
     }
 
-    // Fetch Slerp: invoice week 9–15 Feb → payout Monday 16 Feb → sales period Tue 3–Mon 9 Feb (week_end_date = 9 Feb)
-    const slerpPayoutDate = getSlerpPayoutDateForInvoiceWeek(invoice.week_end_date);
-    const slerpSalesPeriodEnd = getSlerpSalesPeriodEndForInvoiceWeek(invoice.week_end_date);
+    // Fetch Slerp (Wing Shack Direct) for the same invoice week as aggregator platforms.
     let slerpQuery = supabase
       .from('weekly_reports')
       .select('*')
@@ -78,12 +76,15 @@ export async function POST(request: NextRequest) {
         .gte('week_end_date', invoice.week_start_date)
         .lte('week_end_date', invoice.week_end_date);
     } else {
-      slerpQuery = slerpQuery.eq('week_end_date', slerpSalesPeriodEnd);
+      slerpQuery = slerpQuery
+        .eq('week_start_date', invoice.week_start_date)
+        .eq('week_end_date', invoice.week_end_date);
     }
     if (!isCombinedInvoice && invoice.brand?.trim()) {
       slerpQuery = slerpQuery.eq('brand', invoice.brand.trim());
     }
     const { data: slerpReports } = await slerpQuery.order('week_start_date');
+    const reports = [...(aggregatorReports || []), ...(slerpReports || [])];
 
     // Payment details from env (optional) – set in .env.local, see README
     const paymentDaysNum = process.env.INVOICE_PAYMENT_DAYS != null ? Number(process.env.INVOICE_PAYMENT_DAYS) : NaN;
@@ -101,7 +102,7 @@ export async function POST(request: NextRequest) {
       : undefined;
 
     // For pay_them: amount we pay = Deliveroo gross − our fees (D+U+J)
-    const reportsList = reports || [];
+    const reportsList = aggregatorReports || [];
     const deliverooGross = reportsList
       .filter((r: { platform: string }) => r.platform === 'deliveroo')
       .reduce((s: number, r: { gross_revenue?: number }) => s + Number(r.gross_revenue ?? 0), 0);
@@ -127,8 +128,6 @@ export async function POST(request: NextRequest) {
       invoice,
       franchisee,
       reports: reports || [],
-      slerpReports: slerpReports || [],
-      slerpPayoutDate: (slerpReports?.length ?? 0) > 0 ? slerpPayoutDate : undefined,
       paymentDetails,
       bacsCollectionDate,
       amountWePay,

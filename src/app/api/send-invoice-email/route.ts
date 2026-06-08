@@ -6,7 +6,7 @@ import { Resend } from 'resend';
 import Stripe from 'stripe';
 import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
-import { formatRecommendedBacsDateFromInvoiceDate, getSlerpPayoutDateForInvoiceWeek, getSlerpSalesPeriodEndForInvoiceWeek } from '@/lib/utils';
+import { formatRecommendedBacsDateFromInvoiceDate } from '@/lib/utils';
 import { createElement } from 'react';
 
 export async function POST(request: NextRequest) {
@@ -62,18 +62,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch reports' }, { status: 500 });
     }
 
-    const slerpPayoutDate = getSlerpPayoutDateForInvoiceWeek(invoice.week_end_date);
-    const slerpSalesPeriodEnd = getSlerpSalesPeriodEndForInvoiceWeek(invoice.week_end_date);
     let slerpQuery = supabase
       .from('weekly_reports')
       .select('*')
       .eq('franchisee_id', invoice.franchisee_id)
       .eq('platform', 'slerp')
-      .eq('week_end_date', slerpSalesPeriodEnd);
+      .eq('week_start_date', invoice.week_start_date)
+      .eq('week_end_date', invoice.week_end_date);
     if (invoice.brand?.trim()) {
       slerpQuery = slerpQuery.eq('brand', invoice.brand.trim());
     }
     const { data: slerpReports } = await slerpQuery.order('week_start_date');
+    const combinedReports = [...(reports || []), ...(slerpReports || [])];
 
     const paymentDaysNum = process.env.INVOICE_PAYMENT_DAYS != null ? Number(process.env.INVOICE_PAYMENT_DAYS) : NaN;
     const paymentDetails = {
@@ -101,9 +101,7 @@ export async function POST(request: NextRequest) {
     const element = createElement(InvoicePDF, {
       invoice,
       franchisee,
-      reports: reports || [],
-      slerpReports: slerpReports || [],
-      slerpPayoutDate: (slerpReports?.length ?? 0) > 0 ? slerpPayoutDate : undefined,
+      reports: combinedReports,
       paymentDetails,
       bacsCollectionDate,
       logoPath,

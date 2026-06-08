@@ -1,8 +1,10 @@
 /**
  * Parse Slerp statement (xlsx) – Completed orders only.
- * We use the total from "Product total after discounts (GMV)" on the spreadsheet.
- * Columns: Fulfillment date, Location name, Product total after discounts (GMV), Status.
- * Exclude Luton (GFV). Group by (location, payout_date), sum that GMV.
+ * We use net payable per order:
+ *   Gross Transaction value (after refunds) + Total Captured by Slerp (A+B+C)
+ * Columns: Fulfillment date, Location name, Gross Transaction value (after refunds),
+ * Total Captured by Slerp (A+B+C), Status.
+ * Exclude Luton (GFV). Group by (location, payout_date), sum that net payable.
  * Hungry Tum then adds our fee and % on the HT invoice.
  * Payout date = Monday for the previous Tue–Mon sales period.
  */
@@ -37,10 +39,26 @@ function findColumnIndex(
 ): number {
   const normalized = headers.map(normalizeHeader);
   for (const c of candidates) {
-    const idx = normalized.findIndex((h) =>
-      h.includes(c.toLowerCase()) || c.toLowerCase().includes(h)
-    );
+    const needle = c.toLowerCase().trim();
+    const idx = normalized.findIndex((h) => {
+      if (!h) return false;
+      return h.includes(needle) || needle.includes(h);
+    });
     if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+function findHeaderRowIndex(rows: unknown[][]): number {
+  for (let i = 0; i < rows.length; i += 1) {
+    const headerRow = (rows[i] ?? []).map((c) => String(c ?? ''));
+    const iFulfillment = findColumnIndex(headerRow, 'fulfillment date');
+    const iLocation = findColumnIndex(headerRow, 'location name');
+    const iGrossAfterRefunds = findColumnIndex(headerRow, 'gross transaction value (after refunds)');
+    const iCapturedBySlerp = findColumnIndex(headerRow, 'total captured by slerp');
+    if (iFulfillment >= 0 && iLocation >= 0 && iGrossAfterRefunds >= 0 && iCapturedBySlerp >= 0) {
+      return i;
+    }
   }
   return -1;
 }
@@ -55,6 +73,12 @@ function parseGMV(value: unknown): number {
 /** Parse DD/MM/YYYY or D/M/YYYY */
 function parseSlerpDate(value: unknown): Date | null {
   if (value == null) return null;
+  if (value instanceof Date && !isNaN(value.getTime())) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // Excel serial date support.
+    const parsed = new Date(Math.round((value - 25569) * 86400 * 1000));
+    if (!isNaN(parsed.getTime())) return parsed;
+  }
   const s = String(value).trim();
   const parts = s.split(/[/-]/);
   if (parts.length !== 3) return null;
@@ -86,7 +110,15 @@ export function parseSlerpXlsx(buffer: Buffer): SlerpParseResult {
     return { payWeeks: [], errors: ['Sheet is empty'] };
   }
 
-  const headerRow = data[0].map((c) => String(c ?? ''));
+  const headerRowIndex = findHeaderRowIndex(data);
+  if (headerRowIndex < 0) {
+    errors.push(
+      'Could not find required Slerp columns (Fulfillment date, Location name, Gross Transaction value (after refunds), Total Captured by Slerp).'
+    );
+    return { payWeeks: [], errors };
+  }
+
+  const headerRow = data[headerRowIndex].map((c) => String(c ?? ''));
   const iFulfillment = findColumnIndex(
     headerRow,
     'fulfillment date',
@@ -97,28 +129,33 @@ export function parseSlerpXlsx(buffer: Buffer): SlerpParseResult {
     'location name',
     'Location name'
   );
-  const iGMV = findColumnIndex(
+  const iGrossAfterRefunds = findColumnIndex(
     headerRow,
-    'product total after discounts (gmv)',
-    'Product total after discounts (GMV)'
+    'gross transaction value (after refunds)',
+    'Gross Transaction value (after refunds)'
+  );
+  const iCapturedBySlerp = findColumnIndex(
+    headerRow,
+    'total captured by slerp',
+    'Total Captured by Slerp (A) + (B) + (C)'
   );
   const iStatus = findColumnIndex(headerRow, 'status', 'Status');
 
-  if (iFulfillment < 0 || iLocation < 0 || iGMV < 0) {
+  if (iFulfillment < 0 || iLocation < 0 || iGrossAfterRefunds < 0 || iCapturedBySlerp < 0) {
     errors.push(
-      'Could not find required columns: Fulfillment date, Location name, Product total after discounts (GMV).'
+      'Could not find required columns: Fulfillment date, Location name, Gross Transaction value (after refunds), Total Captured by Slerp (A + B + C).'
     );
     return { payWeeks: [], errors };
   }
 
   const map = new Map<string, { weekStart: string; weekEnd: string; payoutDate: string; gross: number }>();
 
-  for (let r = 1; r < data.length; r++) {
+  for (let r = headerRowIndex + 1; r < data.length; r++) {
     const row = data[r] as unknown[];
     if (!Array.isArray(row)) continue;
 
     const status = String(row[iStatus] ?? '').trim().toLowerCase();
-    if (iStatus >= 0 && status !== 'fulfilled') continue;
+    if (iStatus >= 0 && status && !['accepted', 'fulfilled', 'completed'].includes(status)) continue;
 
     const locationRaw = String(row[iLocation] ?? '').trim();
     const locationNorm = locationRaw.toLowerCase();
@@ -127,8 +164,10 @@ export function parseSlerpXlsx(buffer: Buffer): SlerpParseResult {
     const fulfillmentDate = parseSlerpDate(row[iFulfillment]);
     if (!fulfillmentDate) continue;
 
-    const gmv = parseGMV(row[iGMV]);
-    if (gmv <= 0) continue;
+    const grossAfterRefunds = parseGMV(row[iGrossAfterRefunds]);
+    const capturedBySlerp = parseGMV(row[iCapturedBySlerp]);
+    const netPayable = grossAfterRefunds + capturedBySlerp;
+    if (netPayable <= 0) continue;
 
     const payoutDate = getSlerpPayoutDateFromFulfillment(fulfillmentDate);
     const { weekStart, weekEnd } = getSlerpSalesPeriod(payoutDate);
@@ -139,9 +178,9 @@ export function parseSlerpXlsx(buffer: Buffer): SlerpParseResult {
 
     const existing = map.get(payoutKey);
     if (existing) {
-      existing.gross += gmv;
+      existing.gross += netPayable;
     } else {
-      map.set(payoutKey, { weekStart: weekStartStr, weekEnd: weekEndStr, payoutDate: payoutDateStr, gross: gmv });
+      map.set(payoutKey, { weekStart: weekStartStr, weekEnd: weekEndStr, payoutDate: payoutDateStr, gross: netPayable });
     }
   }
 
