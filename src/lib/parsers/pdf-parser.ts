@@ -1,8 +1,12 @@
-import { Platform } from '@/lib/types';
+import { Platform, PlatformFinancialBreakdown } from '@/lib/types';
 import { getWeekRangeFromDate, parseFlexibleDate } from '@/lib/utils';
 
 export interface PDFParseResult {
   gross_revenue: number;
+  /** Actual payout transferred by the platform after their commission deductions (fee basis is gross_revenue). */
+  platform_payout?: number;
+  /** Full financial breakdown parsed from the statement. */
+  financial_breakdown?: PlatformFinancialBreakdown;
   confidence: 'high' | 'medium' | 'low';
   matched_pattern: string | null;
   raw_text: string;
@@ -14,6 +18,7 @@ export interface PDFParseResult {
   /** Financial breakdown fields — populated for Deliveroo PDF. */
   platform_commission?: number;
   delivery_fee?: number;
+  ad_spend?: number;
   restaurant_offers?: number;
   adjustments?: number;
   net_payout?: number;
@@ -128,20 +133,64 @@ function sumHungryTumTotalOrderValueInText(
   return { sum, foundAny, brand_breakdown };
 }
 
+/**
+ * Extract billing period week from Deliveroo PDF text.
+ * Deliveroo PDFs have "Issue date: Mon, 16 Feb 2026" (issue date = Monday AFTER billing period)
+ * and "Period covered: Mon, 09 Feb 00:00 - Sun, 15 Feb 23:59 (UTC)" (actual billing period).
+ * The period dates lack a year, so we infer it from the issue date (handling Dec→Jan rollover).
+ */
+function extractDeliverooWeek(text: string): { week_start_date: string; week_end_date: string } | undefined {
+  const periodMatch = text.match(/[Pp]eriod\s+covered:\s+\w+,\s+(\d{1,2})\s+(\w{3})\s+\d{2}:\d{2}/i);
+  const issueMatch = text.match(/[Ii]ssue\s+date:\s+\w+,\s+\d{1,2}\s+(\w{3})\s+(\d{4})/i);
+  if (!periodMatch || !issueMatch) return undefined;
+
+  const [, day, periodMonth] = periodMatch;
+  const [, issueMonth, issueYearStr] = issueMatch;
+  const MONTHS: Record<string, number> = {
+    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  };
+  let year = parseInt(issueYearStr, 10);
+  // Period is Dec, issue date is Jan → billing period was previous year
+  if (MONTHS[periodMonth] === 11 && MONTHS[issueMonth] === 0) year -= 1;
+  const date = parseFlexibleDate(`${day} ${periodMonth} ${year}`);
+  if (!date) return undefined;
+  return getWeekRangeFromDate(date);
+}
+
 /** Extract Deliveroo financial breakdown from PDF text. */
-function extractDeliverooFinancials(text: string): Pick<PDFParseResult, 'platform_commission' | 'delivery_fee' | 'restaurant_offers' | 'adjustments' | 'net_payout' | 'order_count'> {
+function extractDeliverooFinancials(text: string): Pick<PDFParseResult, 'platform_commission' | 'delivery_fee' | 'ad_spend' | 'restaurant_offers' | 'adjustments' | 'net_payout' | 'order_count'> {
   const parseAmount = (m: RegExpMatchArray | null) =>
     m?.[1] ? parseFloat(m[1].replace(/,/g, '')) : undefined;
 
+  // "Total payable to Wing Shack Co - OG  —  —  £1,025.58"
   const net_payout = parseAmount(text.match(/Total\s+payable\s+to\s+[A-Za-z][^£\n]{0,60}£\s*([\d,]+\.?\d*)/i));
-  const platform_commission = parseAmount(text.match(/(?:Deliveroo\s+)?[Cc]ommission[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
-  const delivery_fee = parseAmount(text.match(/[Dd]elivery\s+(?:fee|charge)[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
-  const restaurant_offers = parseAmount(text.match(/(?:[Pp]romotion|[Oo]ffer|[Dd]iscount)[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
-  const adjustments = parseAmount(text.match(/[Aa]djustment[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
-  const orderCountMatch = text.match(/(\d+)\s+order/i);
-  const order_count = orderCountMatch ? parseInt(orderCountMatch[1]) : undefined;
 
-  return { platform_commission, delivery_fee, restaurant_offers, adjustments, net_payout, order_count };
+  // "Deliveroo Commission   £-232.38   £-46.48   £-278.86" — amounts use £- prefix
+  const platform_commission = parseAmount(text.match(/(?:Deliveroo\s+)?[Cc]ommission\s+£-?([\d,]+\.?\d*)/));
+
+  // "Marketplace+ delivery fee   56   £70.21" — positive amount (payment to restaurant)
+  const delivery_fee = parseAmount(text.match(/[Dd]elivery\s+(?:fee|charge)[^£\n]{0,40}£\s*([\d,]+\.?\d*)/));
+
+  // "Marketer Adverts   10   £-427.62" — paid advertising / boost spend
+  const ad_spend = parseAmount(text.match(/[Mm]arketer\s+[Aa]dverts\s+[\d\s]*£-?([\d,]+\.?\d*)/));
+
+  // "Restaurant funded voucher promotion   £-6.00" — restaurant-funded customer discounts
+  const restaurant_offers = parseAmount(text.match(/[Rr]estaurant\s+funded[^£\n]{0,60}£-?([\d,]+\.?\d*)/));
+
+  // "Customer refunds   £-22.34" — platform refunds deducted from payout
+  const customer_refunds = parseAmount(text.match(/[Cc]ustomer\s+refunds?\s+£-?([\d,]+\.?\d*)/i)) ?? 0;
+  const raw_adjustments = parseAmount(text.match(/[Aa]djustment[^£\n]{0,40}£\s*([\d,]+\.?\d*)/)) ?? 0;
+  const adjustments = Math.round((raw_adjustments + customer_refunds) * 100) / 100 || undefined;
+
+  // Order count from Site Itemisation Summary: "Pickup   1   £x" + "Marketplace+   56   £x"
+  const pickupCount = text.match(/Pickup\s+(\d+)\s+£/)?.[1];
+  const marketplaceCount = text.match(/Marketplace\+\s+(\d+)\s+£/)?.[1];
+  const order_count = (pickupCount !== undefined || marketplaceCount !== undefined)
+    ? (pickupCount ? parseInt(pickupCount, 10) : 0) + (marketplaceCount ? parseInt(marketplaceCount, 10) : 0)
+    : (() => { const m = text.match(/(\d+)\s+order/i); return m ? parseInt(m[1], 10) : undefined; })();
+
+  return { platform_commission, delivery_fee, ad_spend, restaurant_offers, adjustments, net_payout, order_count };
 }
 
 /**
@@ -158,12 +207,25 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
   const financials = extractDeliverooFinancials(text);
 
   // 1) First: sum Total Order Value for Hungry Tum brands anywhere in the document.
-  // This runs on the full extracted text so we always prefer per-brand totals when present,
-  // regardless of page order or "Site Breakdown" section boundaries.
+  // HT charges 6% on the full TOV (gross customer payment).
+  // Offer spend is recorded in the breakdown for invoice transparency, not deducted from the fee basis.
+  const htOffers = Math.round((financials.restaurant_offers ?? 0) * 100) / 100;
+
+  const buildBreakdown = (tov: number): PlatformFinancialBreakdown => ({
+    earnings: tov,
+    platform_commission: financials.platform_commission || undefined,
+    ad_spend: financials.ad_spend || undefined,
+    offer_redemption: htOffers || undefined,
+    adjustments: financials.adjustments || undefined,
+  });
+
   const wholeDoc = sumHungryTumTotalOrderValueInText(text);
   if (wholeDoc.foundAny) {
+    const tov = Math.round(wholeDoc.sum * 100) / 100;
     return {
-      gross_revenue: Math.round(wholeDoc.sum * 100) / 100,
+      gross_revenue: tov,
+      platform_payout: financials.net_payout,
+      financial_breakdown: buildBreakdown(tov),
       confidence: 'high',
       matched_pattern: 'Hungry Tum brands only (per-brand Total Order Value)',
       raw_text: rawTextSnippet,
@@ -173,28 +235,29 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
   }
 
   // 2) No Hungry Tum brand rows found: use first "Total Order Value" in document (single-brand statement).
-  // Still return full three-brand breakdown so the invoice builder shows separate lines (total under Wing Shack, others 0).
   const totalOrderValue = text.match(
     /Total\s+Order\s+Value[^£]*£([\d,]+\.?\d*)/i
   );
   if (totalOrderValue?.[1]) {
-    const total = parseFloat(totalOrderValue[1].replace(/,/g, ''));
-    const rounded = Math.round(total * 100) / 100;
+    const tov = parseFloat(totalOrderValue[1].replace(/,/g, ''));
     return {
-      gross_revenue: rounded,
+      gross_revenue: tov,
+      platform_payout: financials.net_payout,
+      financial_breakdown: buildBreakdown(tov),
       confidence: 'high',
       matched_pattern: 'Total Order Value',
       raw_text: rawTextSnippet,
       deliveroo_brand_breakdown: {
         'Eggs n Stuff': 0,
         'SMSH BN': 0,
-        'Wing Shack': rounded,
+        'Wing Shack': tov,
       },
       ...financials,
     };
   }
   return {
     gross_revenue: 0,
+    platform_payout: financials.net_payout,
     confidence: 'low',
     matched_pattern: null,
     raw_text: rawTextSnippet,
@@ -203,65 +266,101 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
 }
 
 /**
- * Uber Eats sends a Tax Invoice PDF for their fees.
- * This does NOT directly contain gross order value — it shows the fees Uber charges.
+ * Uber Eats weekly earnings statement PDF.
  *
- * Key line: "Uber Eats Marketplace Fee ... Net amount £187.31"
- * To get approximate gross, we try to find the marketplace fee and reverse-calculate,
- * but the user should always verify.
+ * The statement has:
+ *   Earnings £282.11                      ← gross customer order value
+ *   Marketing -£108.13
+ *     Offers on items (incl. VAT) -£76.30  ← HT-covered offer spend
+ *     Offer Redemption Fee (incl. VAT) -£5.60  ← HT-covered redemption fee
+ *     Ad spends -£26.23                   ← NOT covered by HT
+ *   Service fees -£51.04
+ *     Marketplace Fee -£51.04             ← Uber's commission
+ *   Net order error adjustments -£10.70
+ *   Total payout £112.24                  ← what Uber transfers to HT
  *
- * If they upload a payment summary CSV instead, that goes through the CSV parser.
+ * Fee basis = Earnings (full gross). HT covers offer costs — they are recorded for transparency only.
+ * Platform payout = Total payout.
  */
 function extractUberEatsRevenue(text: string): PDFParseResult {
-  // Try to find "Total net amount" which is total fees (not gross revenue)
-  const totalNetAmount = text.match(
-    /Total\s+net\s+amount[\s\t]*£([\d,]+\.?\d*)/i
-  );
+  const raw = text.substring(0, 2000);
+  const parseAbs = (m: RegExpMatchArray | null) =>
+    m?.[1] ? Math.abs(parseFloat(m[1].replace(/,/g, ''))) : null;
 
-  // Try marketplace fee specifically — this is the commission on gross
-  const marketplaceFee = text.match(
-    /(?:Uber\s+Eats\s+)?Marketplace\s+Fee[\s\S]*?£([\d,]+\.?\d*)\s*\n/i
-  );
+  // "Earnings £282.11"
+  const earnings = parseAbs(text.match(/\bEarnings\s+£\s*-?\s*([\d,]+\.?\d*)/i));
 
-  // The marketplace fee net amount is the last £ value on that line
-  const marketplaceFeeNet = text.match(
-    /Marketplace\s+Fee[\s\S]*?£[\d,.]+[\s\S]*?£([\d,]+\.?\d*)/i
-  );
+  // "Offers on items (incl. VAT) -£76.30"
+  const offersAmount = parseAbs(text.match(/Offers?\s+on\s+items?[^£\n]{0,40}£\s*-?\s*([\d,]+\.?\d*)/i)) ?? 0;
 
-  // If we have the marketplace fee, it's typically 30% of gross.
-  // But percentage varies (25-35%), so we flag as low confidence.
-  if (marketplaceFeeNet?.[1]) {
-    const feeAmount = parseFloat(marketplaceFeeNet[1].replace(/,/g, ''));
-    // Common Uber Eats commission is 30%, but this is an estimate
-    const estimatedGross = Math.round((feeAmount / 0.30) * 100) / 100;
+  // "Offer Redemption Fee (incl. VAT) -£5.60"
+  const redemptionAmount = parseAbs(text.match(/Offer\s+Redemption\s+Fee[^£\n]{0,40}£\s*-?\s*([\d,]+\.?\d*)/i)) ?? 0;
 
+  // "Ad spends -£26.23"
+  const adSpend = parseAbs(text.match(/Ad\s+spends?\s+(?:-)?£?\s*-?\s*([\d,]+\.?\d*)/i)) ?? 0;
+
+  // "Marketplace Fee -£51.04" (under Service fees)
+  const platformCommission = parseAbs(text.match(/Marketplace\s+Fee\s+(?:-)?£?\s*-?\s*([\d,]+\.?\d*)/i)) ?? 0;
+
+  // "Net order error adjustments -£10.70"
+  const adjustments = parseAbs(text.match(/Net\s+order\s+error\s+adjustments?\s+(?:-)?£?\s*-?\s*([\d,]+\.?\d*)/i)) ?? 0;
+
+  // "Total payout £112.24"
+  const payoutMatch = text.match(/Total\s+payout\s+£\s*([\d,]+\.?\d*)/i);
+  const platform_payout = payoutMatch ? parseFloat(payoutMatch[1].replace(/,/g, '')) : undefined;
+
+  if (earnings !== null) {
+    // Uber Eats "Earnings" includes the offer-item value at full price, but the customer
+    // never paid that portion — HT covered it. Deduct offer costs so gross_revenue = actual customer spend.
+    const htOffers = offersAmount + redemptionAmount;
+    const grossRevenue = Math.round((earnings - htOffers) * 100) / 100;
+    const breakdown: PlatformFinancialBreakdown = {
+      earnings: grossRevenue || undefined,
+      platform_commission: platformCommission || undefined,
+      ad_spend: adSpend || undefined,
+      // offer_redemption intentionally omitted — already deducted from gross_revenue
+      adjustments: adjustments || undefined,
+    };
     return {
-      gross_revenue: estimatedGross,
-      confidence: 'low',
-      matched_pattern: `Estimated from Marketplace Fee £${feeAmount} (assumed 30% rate - PLEASE VERIFY)`,
-      raw_text: text.substring(0, 2000),
+      gross_revenue: grossRevenue,
+      platform_payout,
+      financial_breakdown: breakdown,
+      confidence: 'high',
+      matched_pattern: `Earnings £${earnings} − offers £${htOffers}`,
+      raw_text: raw,
     };
   }
 
-  // Fallback: total amount payable
-  const totalPayable = text.match(
-    /Total\s+amount\s+payable[\s\t]*£([\d,]+\.?\d*)/i
-  );
+  // Fallback: if Total payout found but not the breakdown, return 0 gross — user must enter fee basis manually
+  if (platform_payout !== undefined) {
+    return {
+      gross_revenue: 0,
+      platform_payout,
+      confidence: 'low',
+      matched_pattern: `Total payout £${platform_payout} — enter net sales (earnings minus offers) manually`,
+      raw_text: raw,
+    };
+  }
+
+  // Legacy fallback: estimate from marketplace fee (old Uber invoice format)
+  const marketplaceFeeNet = text.match(/Marketplace\s+Fee[\s\S]*?£[\d,.]+[\s\S]*?£([\d,]+\.?\d*)/i);
+  if (marketplaceFeeNet?.[1]) {
+    const feeAmount = parseFloat(marketplaceFeeNet[1].replace(/,/g, ''));
+    return {
+      gross_revenue: Math.round((feeAmount / 0.30) * 100) / 100,
+      confidence: 'low',
+      matched_pattern: `Estimated from Marketplace Fee £${feeAmount} (assumed 30% — PLEASE VERIFY)`,
+      raw_text: raw,
+    };
+  }
+
+  const totalPayable = text.match(/Total\s+amount\s+payable[\s\t]*£([\d,]+\.?\d*)/i);
   if (totalPayable?.[1]) {
     return {
       gross_revenue: parseFloat(totalPayable[1].replace(/,/g, '')),
       confidence: 'low',
-      matched_pattern: 'Total amount payable (this is fees, not gross revenue - PLEASE VERIFY)',
-      raw_text: text.substring(0, 2000),
-    };
-  }
-
-  if (totalNetAmount?.[1]) {
-    return {
-      gross_revenue: parseFloat(totalNetAmount[1].replace(/,/g, '')),
-      confidence: 'low',
-      matched_pattern: 'Total net amount (this is fees, not gross revenue - PLEASE VERIFY)',
-      raw_text: text.substring(0, 2000),
+      matched_pattern: 'Total amount payable (fees, not gross — PLEASE VERIFY)',
+      raw_text: raw,
     };
   }
 
@@ -269,7 +368,7 @@ function extractUberEatsRevenue(text: string): PDFParseResult {
     gross_revenue: 0,
     confidence: 'low',
     matched_pattern: null,
-    raw_text: text.substring(0, 2000),
+    raw_text: raw,
   };
 }
 
@@ -314,7 +413,10 @@ export function extractRevenueFromText(
   text: string,
   platform: Platform
 ): PDFParseResult {
-  const weekFromFile = extractWeekFromPDFText(text);
+  // Deliveroo: use "Period covered" billing period (precise) before falling back to generic patterns
+  const weekFromFile = platform === 'deliveroo'
+    ? (extractDeliverooWeek(text) ?? extractWeekFromPDFText(text))
+    : extractWeekFromPDFText(text);
   let result: PDFParseResult;
   switch (platform) {
     case 'deliveroo':

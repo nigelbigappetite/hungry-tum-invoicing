@@ -42,6 +42,19 @@ export interface Franchisee {
   created_at: string;
 }
 
+export interface PlatformFinancialBreakdown {
+  /** Raw gross customer order value before any deductions. */
+  earnings?: number;
+  /** Platform marketplace commission. */
+  platform_commission?: number;
+  /** Advertising / promoter ad spend. */
+  ad_spend?: number;
+  /** Offers on items + redemption fee — covered by HT, shown for transparency. */
+  offer_redemption?: number;
+  /** Order error adjustments, chargebacks etc. */
+  adjustments?: number;
+}
+
 export interface WeeklyReport {
   id: string;
   franchisee_id: string;
@@ -50,6 +63,10 @@ export interface WeeklyReport {
   week_start_date: string;
   week_end_date: string;
   gross_revenue: number;
+  /** Actual payout transferred by the platform after their commission deductions. */
+  platform_payout: number | null;
+  /** Full statement breakdown — populated from file uploads, null for manual entry. */
+  financial_breakdown: PlatformFinancialBreakdown | null;
   file_path: string | null;
   file_type: FileType;
   uploaded_at: string;
@@ -94,6 +111,10 @@ export interface InvoiceLineItem {
 export interface ParsedFileResult {
   platform: Platform;
   gross_revenue: number;
+  /** Actual payout transferred by the platform after their commission — extracted from statement where available. */
+  platform_payout?: number;
+  /** Full financial breakdown from the platform statement. */
+  financial_breakdown?: PlatformFinancialBreakdown;
   file_type: FileType;
   raw_text?: string;
   confidence: 'high' | 'medium' | 'low';
@@ -119,9 +140,9 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
 };
 
 export const STATUS_COLORS: Record<InvoiceStatus, string> = {
-  draft: 'bg-yellow-100 text-yellow-800',
-  sent: 'bg-blue-100 text-blue-800',
-  processing: 'bg-amber-100 text-amber-800',
+  draft: 'bg-orange-100 text-primary-dark',
+  sent: 'bg-purple-100 text-purple-800',
+  processing: 'bg-orange-100 text-primary-dark',
   paid: 'bg-green-100 text-green-800',
   failed: 'bg-red-100 text-red-800',
 };

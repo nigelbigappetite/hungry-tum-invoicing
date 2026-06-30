@@ -1,12 +1,12 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Franchisee, BrandRecord } from '@/lib/types';
 import { formatCurrency, formatDate } from '@/lib/utils';
-import { Plus, Pencil, Trash2, MapPin, Mail, Building2, CheckCircle, ChevronRight, Banknote, Send } from 'lucide-react';
+import { Plus, Pencil, Trash2, MapPin, Mail, ChevronRight } from 'lucide-react';
 import FranchiseeForm from '@/components/FranchiseeForm';
 import { getBrandLogo } from '@/lib/logos';
 
@@ -17,11 +17,8 @@ function FranchiseesPageContent() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingFranchisee, setEditingFranchisee] = useState<Franchisee | null>(null);
-  const [settingUpBacsId, setSettingUpBacsId] = useState<string | null>(null);
-  const [syncingBacs, setSyncingBacs] = useState(false);
   const [brandFilter, setBrandFilter] = useState<string>('all');
   const [brandRecords, setBrandRecords] = useState<BrandRecord[]>([]);
-  const autoSyncAttemptedRef = useRef(false);
 
   const fetchFranchisees = useCallback(async () => {
     setLoading(true);
@@ -92,75 +89,6 @@ function FranchiseesPageContent() {
     fetchFranchisees();
   };
 
-  const setupBacs = async (franchiseeId: string, isReminder = false) => {
-    setSettingUpBacsId(franchiseeId);
-    try {
-      const res = await fetch('/api/setup-bacs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ franchiseeId, reminder: isReminder }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success && data.message) {
-        alert(data.message);
-        fetchFranchisees();
-        return;
-      }
-      if (data.url) {
-        window.location.href = data.url;
-        return;
-      }
-      alert(data.error || 'Failed to start BACS setup');
-    } catch {
-      alert('Failed to start BACS setup');
-    } finally {
-      setSettingUpBacsId(null);
-    }
-  };
-
-  const syncBacsStatus = useCallback(
-    async (silent = false) => {
-      if (syncingBacs) return;
-      setSyncingBacs(true);
-      try {
-        const res = await fetch('/api/sync-bacs-status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-          credentials: 'include',
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          if (!silent) alert(data.error || 'Failed to sync BACS status');
-          return;
-        }
-        if (data.updated > 0) {
-          await fetchFranchisees();
-        }
-        if (!silent) {
-          alert(data.message || 'BACS status sync complete.');
-        }
-      } catch {
-        if (!silent) alert('Failed to sync BACS status');
-      } finally {
-        setSyncingBacs(false);
-      }
-    },
-    [fetchFranchisees, syncingBacs]
-  );
-
-  useEffect(() => {
-    if (loading) return;
-    if (autoSyncAttemptedRef.current) return;
-    const hasPendingBacsStatus = franchisees.some(
-      (f) => !!f.stripe_customer_id && !f.bacs_payment_method_id
-    );
-    if (!hasPendingBacsStatus) return;
-    autoSyncAttemptedRef.current = true;
-    syncBacsStatus(true);
-  }, [franchisees, loading, syncBacsStatus]);
-
   return (
     <div>
       <div className="mb-8 flex items-center justify-between">
@@ -185,15 +113,15 @@ function FranchiseesPageContent() {
         </div>
       ) : franchisees.length === 0 ? (
         <div className="rounded-xl border-2 border-dashed border-slate-200 dark:border-neutral-800 py-16 text-center">
-          <p className="text-lg font-medium text-slate-400 dark:text-neutral-500">No franchisees yet</p>
-          <p className="mt-1 text-sm text-slate-400 dark:text-neutral-500">
+          <p className="text-lg font-medium text-slate-500 dark:text-neutral-400">No franchisees yet</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-neutral-400">
             Click &ldquo;Add Franchisee&rdquo; to get started
           </p>
         </div>
       ) : (
         <>
           {brandRecords.length > 0 && (
-            <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="mb-4 flex items-center gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-slate-500 dark:text-neutral-400">Brand:</span>
                 <select
@@ -208,19 +136,6 @@ function FranchiseesPageContent() {
                   <option value="none">No brands</option>
                 </select>
               </div>
-              <button
-                type="button"
-                onClick={() => syncBacsStatus()}
-                disabled={syncingBacs}
-                className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-3 py-2 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-              >
-                {syncingBacs ? (
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                ) : (
-                  <CheckCircle className="h-3.5 w-3.5" />
-                )}
-                Sync BACS status
-              </button>
             </div>
           )}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -285,10 +200,10 @@ function FranchiseesPageContent() {
                 </div>
               </div>
 
-              <div className="rounded-lg bg-slate-50 dark:bg-neutral-800/50 p-3">
+              <div className="rounded-lg bg-gray-50 dark:bg-neutral-800/50 p-3">
                 {f.payment_model === 'percentage' ? (
                   <div>
-                    <span className="text-xs font-medium uppercase text-slate-400 dark:text-neutral-500">
+                    <span className="text-xs font-medium uppercase text-gray-500 dark:text-neutral-500">
                       Fee Model
                     </span>
                     <p className="text-lg font-bold text-primary">
@@ -297,7 +212,7 @@ function FranchiseesPageContent() {
                   </div>
                 ) : f.payment_model === 'percentage_per_platform' ? (
                   <div>
-                    <span className="text-xs font-medium uppercase text-slate-400 dark:text-neutral-500">
+                    <span className="text-xs font-medium uppercase text-gray-500 dark:text-neutral-500">
                       Fee per platform
                     </span>
                     <p className="text-sm font-bold text-primary">
@@ -309,7 +224,7 @@ function FranchiseesPageContent() {
                   </div>
                 ) : (
                   <div>
-                    <span className="text-xs font-medium uppercase text-slate-400 dark:text-neutral-500">
+                    <span className="text-xs font-medium uppercase text-gray-500 dark:text-neutral-500">
                       Monthly Fee
                     </span>
                     <p className="text-lg font-bold text-primary">
@@ -330,55 +245,8 @@ function FranchiseesPageContent() {
                 )}
               </div>
 
-              <div className="mt-3 flex items-center gap-2">
-                {f.payment_direction === 'pay_them' ? (
-                  <Link
-                    href={`/franchisees/${f.id}`}
-                    className="flex items-center gap-1.5 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 px-2.5 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30"
-                  >
-                    <Banknote className="h-3.5 w-3.5" />
-                    Send payment
-                  </Link>
-                ) : f.bacs_payment_method_id ? (
-                  <span className="flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-400">
-                    <CheckCircle className="h-3.5 w-3.5" />
-                    BACS set up
-                  </span>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setupBacs(f.id)}
-                      disabled={settingUpBacsId === f.id}
-                      className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-                    >
-                      {settingUpBacsId === f.id ? (
-                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                      ) : (
-                        <Building2 className="h-3.5 w-3.5" />
-                      )}
-                      Set up BACS
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setupBacs(f.id, true)}
-                      disabled={settingUpBacsId === f.id}
-                      title="Send a reminder that BACS setup is outstanding (missed payment)"
-                      className="flex items-center gap-1.5 rounded-md border border-slate-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-                    >
-                      {settingUpBacsId === f.id ? (
-                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                      ) : (
-                        <Send className="h-3.5 w-3.5" />
-                      )}
-                      Resend reminder
-                    </button>
-                  </>
-                )}
-              </div>
-
               <div className="mt-3 flex items-center justify-between">
-                <p className="text-xs text-slate-400 dark:text-neutral-500">Added {formatDate(f.created_at)}</p>
+                <p className="text-xs text-slate-500 dark:text-neutral-400">Added {formatDate(f.created_at)}</p>
                 <Link
                   href={`/franchisees/${f.id}`}
                   className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"

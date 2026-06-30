@@ -331,16 +331,16 @@ export default function AnalyticsPage() {
   }, [filteredInvoices, apportionedFees]);
 
   const STATUS_STYLES: Record<string, string> = {
-    draft: 'bg-yellow-100 text-yellow-800',
-    sent: 'bg-blue-100 text-blue-800',
-    processing: 'bg-amber-100 text-amber-800',
+    draft: 'bg-orange-100 text-primary-dark',
+    sent: 'bg-purple-100 text-purple-800',
+    processing: 'bg-orange-100 text-primary-dark',
     paid: 'bg-green-100 text-green-800',
   };
 
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="text-slate-400 dark:text-neutral-500">Loading analytics…</div>
+        <div className="text-slate-500 dark:text-neutral-400">Loading analytics…</div>
       </div>
     );
   }
@@ -420,7 +420,7 @@ export default function AnalyticsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-100 dark:border-neutral-800 text-left text-xs uppercase text-slate-400 dark:text-neutral-500">
+                <tr className="border-b border-slate-100 dark:border-neutral-800 text-left text-xs uppercase text-slate-500 dark:text-neutral-400">
                   <th className="pb-2 pr-4">Brand</th>
                   <th className="pb-2 pr-4 text-right">Gross Revenue</th>
                   <th className="pb-2 pr-4 text-right">Fee</th>
@@ -435,7 +435,7 @@ export default function AnalyticsPage() {
                       <div className="flex items-center gap-2">
                         {b.name}
                         {b.isExternal && (
-                          <span className="rounded-full bg-violet-100 dark:bg-violet-900/30 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">
+                          <span className="rounded-full bg-purple-100 dark:bg-purple-900/30 px-1.5 py-0.5 text-[10px] font-medium text-purple-700 dark:text-purple-300">
                             external
                           </span>
                         )}
@@ -447,14 +447,14 @@ export default function AnalyticsPage() {
                       {b.isExternal ? (
                         <span className="font-medium text-violet-600 dark:text-violet-400">{b.feeBeneficiary}</span>
                       ) : (
-                        <span className="text-orange-500">Hungry Tum</span>
+                        <span className="text-primary">Hungry Tum</span>
                       )}
                     </td>
                     <td className="py-2.5 text-right text-slate-600 dark:text-neutral-300">{formatCurrency(b.net)}</td>
                   </tr>
                 ))}
                 {revenueByBrand.length === 0 && (
-                  <tr><td colSpan={5} className="py-6 text-center text-slate-400 dark:text-neutral-500">No data for this period</td></tr>
+                  <tr><td colSpan={5} className="py-6 text-center text-slate-500 dark:text-neutral-400">No data for this period</td></tr>
                 )}
               </tbody>
               {revenueByBrand.length > 0 && (
@@ -500,7 +500,7 @@ export default function AnalyticsPage() {
               </div>
             </>
           ) : (
-            <p className="py-12 text-center text-sm text-slate-400 dark:text-neutral-500">No data</p>
+            <p className="py-12 text-center text-sm text-slate-500 dark:text-neutral-400">No data</p>
           )}
         </div>
       </div>
@@ -516,12 +516,12 @@ export default function AnalyticsPage() {
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `£${(v / 1000).toFixed(0)}k`} />
               <Tooltip formatter={(v: number | undefined) => formatCurrency(v ?? 0)} />
               <Legend />
-              <Line type="monotone" dataKey="gross" name="Gross Revenue" stroke="#f97316" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="fee" name="Fees" stroke="#8b5cf6" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="gross" name="Gross Revenue" stroke="#ff8c42" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="fee" name="Fees" stroke="#9b59b6" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          <p className="py-12 text-center text-sm text-slate-400 dark:text-neutral-500">No weekly data for this period</p>
+          <p className="py-12 text-center text-sm text-slate-500 dark:text-neutral-400">No weekly data for this period</p>
         )}
       </div>
 
@@ -531,7 +531,7 @@ export default function AnalyticsPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 dark:border-neutral-800 text-left text-xs uppercase text-slate-400 dark:text-neutral-500">
+              <tr className="border-b border-slate-100 dark:border-neutral-800 text-left text-xs uppercase text-slate-500 dark:text-neutral-400">
                 <th className="pb-2 pr-4">Location</th>
                 <th className="pb-2 pr-4 text-right">Gross</th>
                 <th className="pb-2 pr-4 text-right">Fee</th>
@@ -543,13 +543,13 @@ export default function AnalyticsPage() {
                 <tr key={row.name} className="border-b border-slate-50 dark:border-neutral-800 last:border-0">
                   <td className="py-2.5 pr-4">
                     <div className="font-medium text-slate-800 dark:text-neutral-100">{row.location}</div>
-                    <div className="text-xs text-slate-400 dark:text-neutral-500">{row.name}</div>
+                    <div className="text-xs text-slate-500 dark:text-neutral-400">{row.name}</div>
                   </td>
                   <td className="py-2.5 pr-4 text-right text-slate-700 dark:text-neutral-300">{formatCurrency(row.gross)}</td>
                   <td className="py-2.5 pr-4 text-right text-primary font-medium">{formatCurrency(row.fee)}</td>
                   <td className="py-2.5 text-right">
                     {row.outstanding > 0 ? (
-                      <span className="font-medium text-amber-600">{formatCurrency(row.outstanding)}</span>
+                      <span className="font-medium text-primary">{formatCurrency(row.outstanding)}</span>
                     ) : (
                       <span className="text-green-600 text-xs">✓ clear</span>
                     )}
@@ -557,7 +557,7 @@ export default function AnalyticsPage() {
                 </tr>
               ))}
               {revenueByLocation.length === 0 && (
-                <tr><td colSpan={4} className="py-6 text-center text-slate-400 dark:text-neutral-500">No data</td></tr>
+                <tr><td colSpan={4} className="py-6 text-center text-slate-500 dark:text-neutral-400">No data</td></tr>
               )}
             </tbody>
           </table>
@@ -574,25 +574,25 @@ export default function AnalyticsPage() {
                 {s.status}
               </span>
               <p className="mt-2 text-xl font-bold text-slate-800 dark:text-neutral-100">{formatCurrency(s.amount)}</p>
-              <p className="text-xs text-slate-400 dark:text-neutral-500">{s.count} invoice{s.count !== 1 ? 's' : ''}</p>
+              <p className="text-xs text-slate-500 dark:text-neutral-400">{s.count} invoice{s.count !== 1 ? 's' : ''}</p>
             </div>
           ))}
           {statusBreakdown.length === 0 && (
-            <p className="col-span-4 py-6 text-center text-sm text-slate-400 dark:text-neutral-500">No invoices for this period</p>
+            <p className="col-span-4 py-6 text-center text-sm text-slate-500 dark:text-neutral-400">No invoices for this period</p>
           )}
         </div>
 
         {/* Stacked bar: paid vs outstanding per location */}
         {revenueByLocation.some((r) => r.fee > 0) && (
           <div className="mt-6">
-            <p className="mb-2 text-xs uppercase text-slate-400 dark:text-neutral-500 font-medium">Fees by location</p>
+            <p className="mb-2 text-xs uppercase text-slate-500 dark:text-neutral-400 font-medium">Fees by location</p>
             <ResponsiveContainer width="100%" height={160}>
               <BarChart data={revenueByLocation} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                 <XAxis dataKey="location" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `£${v}`} />
                 <Tooltip formatter={(v: number | undefined) => formatCurrency(v ?? 0)} />
                 <Bar dataKey="paid" name="Paid" stackId="a" fill="#22c55e" />
-                <Bar dataKey="outstanding" name="Outstanding" stackId="a" fill="#f97316" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="outstanding" name="Outstanding" stackId="a" fill="#ff8c42" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -622,16 +622,16 @@ function KpiCard({
   const valueClass = accent
     ? 'text-primary'
     : purple
-    ? 'text-violet-600 dark:text-violet-400'
+    ? 'text-purple-600 dark:text-purple-400'
     : warn
-    ? 'text-amber-600'
+    ? 'text-primary'
     : 'text-slate-800 dark:text-neutral-100';
 
   return (
     <div className="rounded-xl border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
-      <p className="text-xs font-medium uppercase text-slate-400 dark:text-neutral-500">{label}</p>
+      <p className="text-xs font-medium uppercase text-slate-500 dark:text-neutral-400">{label}</p>
       <p className={`mt-1 text-2xl font-bold ${valueClass}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-slate-400 dark:text-neutral-500">{sub}</p>}
+      {sub && <p className="mt-0.5 text-xs text-slate-500 dark:text-neutral-400">{sub}</p>}
     </div>
   );
 }

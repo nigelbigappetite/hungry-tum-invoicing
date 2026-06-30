@@ -6,7 +6,7 @@ import {
   Image,
   StyleSheet,
 } from '@react-pdf/renderer';
-import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, InvoiceLineItem, Platform } from '@/lib/types';
+import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, InvoiceLineItem, Platform, PlatformFinancialBreakdown } from '@/lib/types';
 import { getPlatformFeeRate } from '@/lib/utils';
 
 // Use built-in Helvetica so PDF generation works in Node (no font URL fetch)
@@ -118,18 +118,18 @@ const styles = StyleSheet.create({
   colFee: { width: '25%', textAlign: 'right' },
   totalRow: {
     flexDirection: 'row',
-    padding: 12,
+    padding: 10,
     backgroundColor: '#f8fafc',
     borderRadius: 4,
     marginTop: 4,
   },
   totalLabel: {
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 10,
+    fontWeight: 700,
     color: '#0f172a',
   },
   totalAmount: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: 700,
     color: '#0f172a',
     textAlign: 'right',
@@ -153,6 +153,105 @@ const styles = StyleSheet.create({
     fontWeight: 700,
     color: '#ea580c',
     textAlign: 'right',
+  },
+  // Per-platform breakdown styles
+  platformSectionHeader: {
+    flexDirection: 'row',
+    paddingBottom: 5,
+    marginTop: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#cbd5e1',
+    marginBottom: 3,
+  },
+  platformSectionHeaderText: {
+    fontSize: 8,
+    fontWeight: 700,
+    color: '#475569',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    paddingVertical: 3,
+  },
+  breakdownLabel: {
+    width: '65%',
+    fontSize: 9,
+    color: '#475569',
+  },
+  breakdownAmount: {
+    width: '35%',
+    fontSize: 9,
+    color: '#1e293b',
+    textAlign: 'right',
+  },
+  breakdownSubtotalRow: {
+    flexDirection: 'row',
+    paddingVertical: 5,
+    marginTop: 3,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  breakdownSubtotalLabel: {
+    width: '65%',
+    fontSize: 9,
+    fontWeight: 700,
+    color: '#1e293b',
+  },
+  breakdownSubtotalAmount: {
+    width: '35%',
+    fontSize: 9,
+    fontWeight: 700,
+    color: '#1e293b',
+    textAlign: 'right',
+  },
+  platformDivider: {
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    marginVertical: 6,
+  },
+  // Grand totals
+  grandTotalRow: {
+    flexDirection: 'row',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#cbd5e1',
+  },
+  grandTotalDeductRow: {
+    flexDirection: 'row',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  payoutRow: {
+    flexDirection: 'row',
+    padding: 12,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 6,
+    marginTop: 6,
+  },
+  payoutLabel: {
+    width: '65%',
+    fontSize: 12,
+    fontWeight: 700,
+    color: '#15803d',
+  },
+  payoutAmount: {
+    width: '35%',
+    fontSize: 14,
+    fontWeight: 700,
+    color: '#15803d',
+    textAlign: 'right',
+  },
+  addressLabel: {
+    fontSize: 7,
+    fontWeight: 600,
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: 6,
+    marginBottom: 2,
   },
   footer: {
     marginTop: 40,
@@ -236,31 +335,42 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const platformReports = [...(reports || []), ...(slerpReports || [])].filter((r) =>
     r && INVOICE_PLATFORMS.includes(r.platform as typeof INVOICE_PLATFORMS[number])
   );
-  const invoiceBrandFallback = getInvoiceBrandFallback(invoice);
-  const platformTotalsByBrand = new Map<string, { platform: InvoicePlatform; brand: string | null; gross: number }>();
-  platformReports.forEach((report) => {
-    const platform = report.platform as InvoicePlatform;
-    const brand = report.brand?.trim() || invoiceBrandFallback;
-    const key = `${platform}::${brand ?? ''}`;
-    const current = platformTotalsByBrand.get(key) ?? { platform, brand, gross: 0 };
-    current.gross += Number(report.gross_revenue ?? 0);
-    platformTotalsByBrand.set(key, current);
-  });
-  const platformTotals = Array.from(platformTotalsByBrand.values())
-    .sort((a, b) => {
-      const brandCompare = (a.brand ?? 'All brands').localeCompare(b.brand ?? 'All brands');
-      if (brandCompare !== 0) return brandCompare;
-      return INVOICE_PLATFORMS.indexOf(a.platform) - INVOICE_PLATFORMS.indexOf(b.platform);
+  // Build per-platform blocks for detailed breakdown display
+  const byPlatform = new Map<InvoicePlatform, WeeklyReport[]>();
+  for (const r of platformReports) {
+    const p = r.platform as InvoicePlatform;
+    if (!byPlatform.has(p)) byPlatform.set(p, []);
+    byPlatform.get(p)!.push(r);
+  }
+  const platformBlocks = INVOICE_PLATFORMS
+    .filter((p) => byPlatform.has(p))
+    .map((platform) => {
+      const rs = byPlatform.get(platform)!;
+      const grossRevenue = Math.round(rs.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0) * 100) / 100;
+      const platformPayout = Math.round(rs.reduce((s, r) => s + Number(r.platform_payout ?? 0), 0) * 100) / 100;
+      const pct = getPlatformFeeRate(franchisee, platform as Platform);
+      const fee = Math.round(grossRevenue * (pct / 100) * 100) / 100;
+      // Aggregate breakdown fields across all reports for this platform
+      const earnings = Math.round(rs.reduce((s, r) => {
+        const bd = r.financial_breakdown as PlatformFinancialBreakdown | null;
+        return s + Number(bd?.earnings ?? r.gross_revenue ?? 0);
+      }, 0) * 100) / 100;
+      const commission = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.platform_commission ?? 0), 0) * 100) / 100;
+      const adSpend = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.ad_spend ?? 0), 0) * 100) / 100;
+      const offerRedemption = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.offer_redemption ?? 0), 0) * 100) / 100;
+      const adjustments = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.adjustments ?? 0), 0) * 100) / 100;
+      const hasBreakdown = commission > 0 || adSpend > 0 || offerRedemption > 0;
+      return { platform, grossRevenue, fee, pct, platformPayout, hasBreakdown, earnings, commission, adSpend, offerRedemption, adjustments };
     })
-    .map((row) => {
-      const gross = Math.round(row.gross * 100) / 100;
-      const pct = getPlatformFeeRate(franchisee, row.platform as Platform);
-      const fee = Math.round(gross * (pct / 100) * 100) / 100;
-      return { ...row, gross, pct, fee };
-    })
-    .filter((row) => row.fee > 0);
-  const platformGrossTotal = Math.round(platformTotals.reduce((sum, row) => sum + row.gross, 0) * 100) / 100;
-  const platformFeeTotal = Math.round(platformTotals.reduce((sum, row) => sum + row.fee, 0) * 100) / 100;
+    .filter((b) => b.grossRevenue > 0 || b.platformPayout > 0);
+
+  const platformGrossTotal = Math.round(platformBlocks.reduce((s, b) => s + b.grossRevenue, 0) * 100) / 100;
+  const platformFeeTotal = Math.round(platformBlocks.reduce((s, b) => s + b.fee, 0) * 100) / 100;
+  const platformPayoutTotal = Math.round(platformBlocks.reduce((s, b) => s + b.platformPayout, 0) * 100) / 100;
+  const hasPayoutData = platformPayoutTotal > 0;
+  const kitchenPayout = hasPayoutData
+    ? Math.round((platformPayoutTotal - platformFeeTotal) * 100) / 100
+    : Math.round((platformGrossTotal - platformFeeTotal) * 100) / 100;
   const catchUpLineItems = Array.isArray(invoice.line_items) ? invoice.line_items.filter(Boolean) as InvoiceLineItem[] : [];
   const isCatchUpInvoice = catchUpLineItems.length > 0;
   const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed';
@@ -311,7 +421,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             </View>
             <View style={{ marginLeft: 12 }}>
               <Text style={styles.brandSub}>
-                Franchise Invoice{invoice.brand?.trim() ? ` – ${invoice.brand.trim()}` : ''}
+                Digital Franchise{invoice.brand?.trim() ? ` – ${invoice.brand.trim()}` : ''}
               </Text>
               {businessAddressLines && businessAddressLines.length > 0 && (
                 <View style={{ marginTop: 6 }}>
@@ -332,25 +442,31 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
         <View style={styles.infoSection}>
           <View style={styles.infoBlock}>
             <Text style={styles.infoLabel}>Bill To</Text>
-            <Text style={styles.infoText}>{franchisee.name}</Text>
-            {(() => {
-              const businessLines = franchisee.business_address?.trim()
-                ? franchisee.business_address.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-                : [];
-              const siteLines = franchisee.site_address?.trim()
-                ? franchisee.site_address.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-                : [];
-              const addressLines = [...businessLines, ...siteLines];
-              if (addressLines.length > 0) {
-                return addressLines.map((line, i) => (
-                  <Text key={i} style={styles.infoText}>{line}</Text>
-                ));
-              }
-              return franchisee.location ? (
-                <Text style={styles.infoText}>{franchisee.location}</Text>
-              ) : null;
-            })()}
-            <Text style={styles.infoText}>{franchisee.email}</Text>
+            <Text style={{ ...styles.infoText, fontWeight: 700 }}>{franchisee.name}</Text>
+
+            {franchisee.business_address?.trim() ? (
+              <>
+                <Text style={styles.addressLabel}>Registered Address</Text>
+                {franchisee.business_address.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line, i) => (
+                  <Text key={`ba-${i}`} style={styles.infoText}>{line}</Text>
+                ))}
+              </>
+            ) : null}
+
+            {franchisee.site_address?.trim() ? (
+              <>
+                <Text style={styles.addressLabel}>Site Address</Text>
+                {franchisee.site_address.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line, i) => (
+                  <Text key={`sa-${i}`} style={styles.infoText}>{line}</Text>
+                ))}
+              </>
+            ) : null}
+
+            {!franchisee.business_address?.trim() && !franchisee.site_address?.trim() && franchisee.location ? (
+              <Text style={styles.infoText}>{franchisee.location}</Text>
+            ) : null}
+
+            <Text style={{ ...styles.infoText, marginTop: 6 }}>{franchisee.email}</Text>
           </View>
           <View style={styles.infoBlock}>
             <Text style={styles.infoLabel}>Invoice Date</Text>
@@ -358,7 +474,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
               {formatDateStr(invoice.created_at)}
             </Text>
             <Text style={{ ...styles.infoLabel, marginTop: 10 }}>
-              Period
+              Period Covered
             </Text>
             <Text style={styles.infoText}>
               {formatDateStr(invoice.week_start_date)} &ndash;{' '}
@@ -445,81 +561,135 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             </>
           ) : (
             <>
-              <Text style={{ ...styles.infoLabel, marginBottom: 6 }}>
-                Franchise fee – platform sales
+              <Text style={{ ...styles.infoLabel, marginBottom: 4 }}>
+                Platform breakdown — {periodLabel}
               </Text>
-              <View style={styles.tableHeader}>
-                <Text style={{ ...styles.tableHeaderText, ...styles.colPlatform }}>
-                  Brand / Platform
+
+              {/* Per-platform sections */}
+              {platformBlocks.map((block, idx) => (
+                <View key={block.platform}>
+                  {/* Platform header */}
+                  <View style={styles.platformSectionHeader}>
+                    <Text style={styles.platformSectionHeaderText}>
+                      {PLATFORM_LABELS[block.platform]}
+                    </Text>
+                  </View>
+
+                  {/* Gross revenue */}
+                  <View style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>Gross revenue</Text>
+                    <Text style={styles.breakdownAmount}>
+                      {formatGBP(block.grossRevenue)}
+                    </Text>
+                  </View>
+
+                  {/* HT fee */}
+                  <View style={styles.breakdownRow}>
+                    <Text style={styles.breakdownLabel}>
+                      {franchisee.payment_model !== 'percentage_per_platform'
+                        ? `Hungry Tum fee (${block.pct}% of gross revenue)`
+                        : 'Hungry Tum fee'}
+                    </Text>
+                    <Text style={styles.breakdownAmount}>-{formatGBP(block.fee)}</Text>
+                  </View>
+
+                  {/* Platform commission */}
+                  {(block.commission > 0 || block.adSpend > 0) && (
+                    <View style={styles.breakdownRow}>
+                      <Text style={styles.breakdownLabel}>Platform commission</Text>
+                      <Text style={styles.breakdownAmount}>
+                        -{formatGBP(Math.round((block.commission + block.adSpend) * 100) / 100)}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Offer redemption */}
+                  {block.offerRedemption > 0 && (
+                    <View style={styles.breakdownRow}>
+                      <Text style={styles.breakdownLabel}>
+                        Promotional offer costs (deducted by platform, covered by HT)
+                      </Text>
+                      <Text style={styles.breakdownAmount}>-{formatGBP(block.offerRedemption)}</Text>
+                    </View>
+                  )}
+
+                  {/* Adjustments */}
+                  {block.adjustments > 0 && (
+                    <View style={styles.breakdownRow}>
+                      <Text style={styles.breakdownLabel}>Order adjustments</Text>
+                      <Text style={styles.breakdownAmount}>-{formatGBP(block.adjustments)}</Text>
+                    </View>
+                  )}
+
+                  {/* Platform payout subtotal */}
+                  {block.platformPayout > 0 && (
+                    <View style={styles.breakdownSubtotalRow}>
+                      <Text style={styles.breakdownSubtotalLabel}>Platform payout received</Text>
+                      <Text style={styles.breakdownSubtotalAmount}>{formatGBP(block.platformPayout)}</Text>
+                    </View>
+                  )}
+
+                  {/* Divider between platforms */}
+                  {idx < platformBlocks.length - 1 && <View style={styles.platformDivider} />}
+                </View>
+              ))}
+
+              {/* Grand totals */}
+              {hasPayoutData && (
+                <View style={styles.grandTotalRow}>
+                  <Text style={{ ...styles.totalLabel, width: '65%' }}>Total platform payout received</Text>
+                  <Text style={{ ...styles.totalAmount, width: '35%' }}>{formatGBP(platformPayoutTotal)}</Text>
+                </View>
+              )}
+
+              <View style={styles.grandTotalDeductRow}>
+                <Text style={{ ...styles.breakdownLabel, width: '65%' }}>
+                  {`Total Hungry Tum fee${franchisee.payment_model !== 'percentage_per_platform' ? ` (${invoice.fee_percentage}%)` : ''}`}
                 </Text>
-                <Text style={{ ...styles.tableHeaderText, ...styles.colAmount }}>
-                  Gross Revenue
-                </Text>
-                <Text style={{ ...styles.tableHeaderText, ...styles.colFee }}>
-                  Fee
+                <Text style={{ ...styles.breakdownAmount, width: '35%' }}>
+                  -{formatGBP(platformFeeTotal)}
                 </Text>
               </View>
 
-              {platformTotals.map((row) => {
-                return (
-                  <View key={`platform-${row.platform}-${row.brand ?? 'all-brands'}`} style={styles.tableRow}>
-                    <Text style={{ ...styles.infoText, ...styles.colPlatform }}>
-                      {`${row.brand ?? 'All brands'} – ${PLATFORM_LABELS[row.platform]}`}
-                    </Text>
-                    <Text style={{ ...styles.infoText, ...styles.colAmount, fontWeight: 600 }}>
-                      {formatGBP(row.gross)}
-                    </Text>
-                    <Text style={{ ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c' }}>
-                      {row.pct}% · {formatGBP(row.fee)}
-                    </Text>
-                  </View>
-                );
-              })}
-
-              <View style={styles.totalRow}>
-                <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Total Gross Revenue</Text>
-                <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
-                  {formatGBP(platformGrossTotal)}
-                </Text>
-                <View style={styles.colFee} />
+              <View style={styles.payoutRow}>
+                <Text style={styles.payoutLabel}>Your payout this week</Text>
+                <Text style={styles.payoutAmount}>{formatGBP(kitchenPayout)}</Text>
               </View>
             </>
           )}
 
-          <View style={styles.feeRow}>
-            <Text
-              style={
-                isMonthlyFixedInvoice
-                  ? { ...styles.infoText, ...styles.colPlatform, fontWeight: 600, color: '#ea580c' }
-                  : styles.feeLabel
-              }
-            >
-              {payThem
-                ? 'Amount due (invoice total)'
-                : isMonthlyFixedInvoice
-                  ? 'Total monthly franchise fee'
-                  : isCatchUpInvoice
-                    ? 'Total catch-up invoice'
-                  : standardWeeklyFeeLabel}
-            </Text>
-            <Text
-              style={
-                isMonthlyFixedInvoice
-                  ? { ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c', textAlign: 'right' }
-                  : styles.feeAmount
-              }
-            >
-              {formatGBP(displayedInvoiceFeeAmount)}
-            </Text>
-          </View>
-          {isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && (
-            <View style={{ ...styles.totalRow, marginTop: 8 }}>
-              <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Amount to pay</Text>
-              <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
-                {formatGBP(maidstoneAmountToPay)}
-              </Text>
-              <View style={styles.colFee} />
-            </View>
+          {(isMonthlyFixedInvoice || isCatchUpInvoice) && (
+            <>
+              <View style={styles.feeRow}>
+                <Text
+                  style={
+                    isMonthlyFixedInvoice
+                      ? { ...styles.infoText, ...styles.colPlatform, fontWeight: 600, color: '#ea580c' }
+                      : styles.feeLabel
+                  }
+                >
+                  {isMonthlyFixedInvoice ? 'Total monthly franchise fee' : 'Total catch-up invoice'}
+                </Text>
+                <Text
+                  style={
+                    isMonthlyFixedInvoice
+                      ? { ...styles.infoText, ...styles.colFee, fontWeight: 600, color: '#ea580c', textAlign: 'right' }
+                      : styles.feeAmount
+                  }
+                >
+                  {formatGBP(displayedInvoiceFeeAmount)}
+                </Text>
+              </View>
+              {isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && (
+                <View style={{ ...styles.totalRow, marginTop: 8 }}>
+                  <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Amount to pay</Text>
+                  <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
+                    {formatGBP(maidstoneAmountToPay)}
+                  </Text>
+                  <View style={styles.colFee} />
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -559,9 +729,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           ) : (
             <>
               <Text style={styles.footerTitle}>
-                {isCatchUpInvoice
-                  ? 'Payment options'
-                  : 'Direct Debit'}
+                {isCatchUpInvoice ? 'Payment options' : 'Payment'}
               </Text>
               {noPaymentRequired ? (
                 <Text style={styles.footerText}>No payment is required.</Text>
@@ -585,7 +753,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 </>
               ) : (
                 <Text style={styles.footerText}>
-                  Funds will clear by BACS around 7–10 working days from receipt of the invoice.
+                  Funds will be transferred to {franchisee.name} by bank transfer.
                 </Text>
               )}
               {!isCatchUpInvoice && (

@@ -4,21 +4,16 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --sidebar-bg: #1e293b;
-  --sidebar-text: #e2e8f0;
-  --primary: #f97316;
-  --primary-dark: #ea580c;
-  --primary-light: #fed7aa;
+  --background: #ffffff;
+  --foreground: #111827;
+  --primary: #ff8c42;
+  --primary-dark: #e0712d;
+  --primary-light: #fff0e5;
 }
 
-/* Charcoal dark mode (not pitch black) */
 .dark {
   --background: #252525;
   --foreground: #e5e5e5;
-  --sidebar-bg: #252525;
-  --sidebar-text: #e5e5e5;
 }
 
 @theme inline {
@@ -27,8 +22,6 @@
   --color-primary: var(--primary);
   --color-primary-dark: var(--primary-dark);
   --color-primary-light: var(--primary-light);
-  --color-sidebar-bg: var(--sidebar-bg);
-  --color-sidebar-text: var(--sidebar-text);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -37,6 +30,14 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Light mode only: primary-coloured text becomes bold black for legibility on white.
+   bg-primary (buttons, active nav) is unaffected — this only targets text utilities. */
+html:not(.dark) .text-primary,
+html:not(.dark) .text-primary-dark {
+  color: #111827;
+  font-weight: 700;
 }
 
 /* Custom scrollbar */
@@ -49,12 +50,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #d1d5db;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #9ca3af;
 }
 
 .dark ::-webkit-scrollbar-thumb {

@@ -16,6 +16,14 @@ interface FileUploadProps {
     file_name: string;
     /** When Deliveroo PDF has multiple Hungry Tum brands (e.g. Bethnal Green), per-brand Total Order Value. */
     deliveroo_brand_breakdown?: Record<string, number>;
+    platform_commission?: number;
+    delivery_fee?: number;
+    ad_spend?: number;
+    restaurant_offers?: number;
+    platform_offers?: number;
+    adjustments?: number;
+    net_payout?: number;
+    order_count?: number;
   }) => void;
   onClear: () => void;
   result?: {
@@ -83,6 +91,14 @@ export default function FileUpload({
         confidence: data.confidence,
         file_name: file.name,
         ...(data.deliveroo_brand_breakdown && { deliveroo_brand_breakdown: data.deliveroo_brand_breakdown }),
+        platform_commission: data.platform_commission,
+        delivery_fee: data.delivery_fee,
+        ad_spend: data.ad_spend,
+        restaurant_offers: data.restaurant_offers,
+        platform_offers: data.platform_offers,
+        adjustments: data.adjustments,
+        net_payout: data.net_payout,
+        order_count: data.order_count,
       });
     } catch {
       // Network/other failure – still allow manual entry with the uploaded file.
@@ -118,7 +134,7 @@ export default function FileUpload({
   const platformAccent: Record<Platform, string> = {
     deliveroo: 'text-teal-700',
     ubereats: 'text-green-700',
-    justeat: 'text-orange-700',
+    justeat: 'text-primary-dark',
     slerp: 'text-violet-700',
   };
 
@@ -153,7 +169,7 @@ export default function FileUpload({
             {formatCurrency(result.gross_revenue)}
           </div>
           {result.confidence !== 'high' && (
-            <div className="flex items-center gap-1 text-xs text-amber-600">
+            <div className="flex items-center gap-1 text-xs text-primary-dark">
               <AlertCircle className="h-3.5 w-3.5" />
               {result.confidence === 'medium'
                 ? 'Check this value - medium confidence'
@@ -200,7 +216,7 @@ export default function FileUpload({
                   ) : platform === 'ubereats' ? (
                     <FileText className="h-5 w-5 text-green-600" />
                   ) : (
-                    <FileText className="h-5 w-5 text-orange-600" />
+                    <FileText className="h-5 w-5 text-primary" />
                   )}
                 </div>
                 <div className="text-center">

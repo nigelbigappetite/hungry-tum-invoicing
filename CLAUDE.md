@@ -162,4 +162,4 @@ npm run lint     # ESLint
 ```
 
 ---
-*Last updated: 2026-03-14*
+*Last updated: 2026-04-01*

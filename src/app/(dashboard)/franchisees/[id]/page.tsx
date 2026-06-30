@@ -14,7 +14,6 @@ import {
   Platform,
   WeeklyReport,
   BRAND_OPTIONS,
-  AGGREGATOR_PLATFORMS,
   type AggregatorPlatform,
 } from '@/lib/types';
 import {
@@ -32,13 +31,11 @@ import {
   sumRevenueRowsForExtendedInvoice,
 } from '@/lib/monthly-invoice-revenue';
 import { getPlatformLogo, getBrandLogo } from '@/lib/logos';
-import { startOfWeek, endOfWeek, format, parseISO } from 'date-fns';
-import FileUpload from '@/components/FileUpload';
+import { format, parseISO } from 'date-fns';
 import {
   AlertCircle,
   CheckCircle,
   ArrowLeft,
-  Upload,
   FileText,
   Download,
   ChevronDown,
@@ -48,32 +45,12 @@ import {
   Pencil,
   MapPin,
   Mail,
-  X,
   Banknote,
   Trash2,
   Eye,
 } from 'lucide-react';
 
 const TEST_INVOICE_EMAIL = 'nigelwingshackco@gmail.com';
-
-interface PlatformResult {
-  platform: Platform;
-  gross_revenue: number;
-  file: File;
-  file_type: 'csv' | 'pdf';
-  confidence: string;
-  file_name: string;
-  /** When Deliveroo PDF has multiple Hungry Tum brands (e.g. Bethnal Green), per-brand Total Order Value. */
-  deliveroo_brand_breakdown?: Record<string, number>;
-  /** Financial breakdown — populated from parsers. */
-  platform_commission?: number;
-  delivery_fee?: number;
-  restaurant_offers?: number;
-  platform_offers?: number;
-  adjustments?: number;
-  net_payout?: number;
-  order_count?: number;
-}
 
 interface InvoiceWithFranchisee extends Invoice {
   franchisees: {
@@ -97,35 +74,9 @@ export default function FranchiseeDetailPage() {
 
   const [franchisee, setFranchisee] = useState<Franchisee | null>(null);
   const [loadingFranchisee, setLoadingFranchisee] = useState(true);
-  const [activeTab, setActiveTab] = useState<'upload' | 'invoices'>('invoices');
   const [settingUpBacs, setSettingUpBacs] = useState(false);
   const [clearingBacs, setClearingBacs] = useState(false);
 
-  // Upload state: multiple rows per platform so multi-brand sites can upload several reports per week
-  const [weekDate, setWeekDate] = useState(() => {
-    const now = new Date();
-    const monday = startOfWeek(now, { weekStartsOn: 1 });
-    return format(monday, 'yyyy-MM-dd');
-  });
-  type UploadRow = {
-    rowId: string;
-    platform: Platform;
-    brand: string;
-    result: PlatformResult | null;
-    editableRevenue: string;
-  };
-  const [uploadRows, setUploadRows] = useState<UploadRow[]>(() =>
-    AGGREGATOR_PLATFORMS.map((platform) => ({
-      rowId: `init-${platform}`,
-      platform,
-      brand: '',
-      result: null,
-      editableRevenue: '',
-    }))
-  );
-  const [saving, setSaving] = useState(false);
-  const [uploadError, setUploadError] = useState('');
-  const [uploadSuccess, setUploadSuccess] = useState(false);
   const [monthlyInvoiceSaving, setMonthlyInvoiceSaving] = useState(false);
   const [monthlyInvoiceMessage, setMonthlyInvoiceMessage] = useState('');
   const [monthlyInvoiceError, setMonthlyInvoiceError] = useState('');
@@ -137,21 +88,6 @@ export default function FranchiseeDetailPage() {
   });
   const [backfillArrears, setBackfillArrears] = useState('6500');
   const [backfillingInvoices, setBackfillingInvoices] = useState(false);
-
-  // Email drafts (payment failure notifications pending review)
-  interface EmailDraft {
-    id: string;
-    invoice_id: string;
-    to_email: string;
-    subject: string;
-    body: string;
-    status: 'draft' | 'sent' | 'discarded';
-    created_at: string;
-  }
-  const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
-  const [approvingDraftId, setApprovingDraftId] = useState<string | null>(null);
-  const [discardingDraftId, setDiscardingDraftId] = useState<string | null>(null);
-  const [expandedDraftId, setExpandedDraftId] = useState<string | null>(null);
 
   // Invoices state (fetch all for metrics; filter in UI for table)
   const [invoices, setInvoices] = useState<InvoiceWithFranchisee[]>([]);
@@ -167,9 +103,7 @@ export default function FranchiseeDetailPage() {
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
   const [collectDatePickerId, setCollectDatePickerId] = useState<string | null>(null);
   const [savingCollectDateId, setSavingCollectDateId] = useState<string | null>(null);
-  const [selectedCatchUpInvoiceIds, setSelectedCatchUpInvoiceIds] = useState<string[]>([]);
-  const [showCatchUpPreview, setShowCatchUpPreview] = useState(false);
-  const [creatingCatchUpInvoice, setCreatingCatchUpInvoice] = useState(false);
+  const [regeneratingAllPdfs, setRegeneratingAllPdfs] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<InvoiceWithFranchisee | null>(null);
   const [editInvoiceSaving, setEditInvoiceSaving] = useState(false);
   const [editInvoiceForm, setEditInvoiceForm] = useState({ total_gross_revenue: '', fee_amount: '', fee_percentage: '', week_start_date: '' });
@@ -179,15 +113,6 @@ export default function FranchiseeDetailPage() {
   const [manualAddAmount, setManualAddAmount] = useState('');
   const [manualAddSaving, setManualAddSaving] = useState(false);
   const [manualAddError, setManualAddError] = useState('');
-  const [manualWeekInputs, setManualWeekInputs] = useState<Record<Platform, string>>({
-    deliveroo: '',
-    ubereats: '',
-    justeat: '',
-    slerp: '',
-  });
-  const [manualWeekSaving, setManualWeekSaving] = useState(false);
-  const [manualWeekError, setManualWeekError] = useState('');
-  const [manualWeekSuccess, setManualWeekSuccess] = useState(false);
 
   // Platform revenue for metrics (all time)
   const [platformRevenue, setPlatformRevenue] = useState<Record<Platform, number>>({
@@ -197,19 +122,6 @@ export default function FranchiseeDetailPage() {
     slerp: 0,
   });
   const [loadingPlatformRevenue, setLoadingPlatformRevenue] = useState(false);
-
-  // Slerp upload (Wing Shack Direct)
-  type SlerpPreviewRow = { weekStart: string; weekEnd: string; payoutDate: string; grossRevenue: number; feePercentage: number; feeAmount: number };
-  type ComputedSlerpPreviewRow = SlerpPreviewRow & { payoutAmount: number; invoiceGrossRevenue: number; invoiceFeeAmount: number };
-  const [slerpFile, setSlerpFile] = useState<File | null>(null);
-  const [slerpPreview, setSlerpPreview] = useState<SlerpPreviewRow[]>([]);
-  const [slerpUseStripePayoutTruth, setSlerpUseStripePayoutTruth] = useState(true);
-  const [slerpParsing, setSlerpParsing] = useState(false);
-  const [slerpSaving, setSlerpSaving] = useState(false);
-  const [slerpError, setSlerpError] = useState('');
-  const [slerpSuccess, setSlerpSuccess] = useState(false);
-  const [savedSlerpForSelectedWeek, setSavedSlerpForSelectedWeek] = useState<{ gross: number; fee: number } | null>(null);
-  const slerpBrand = 'Wing Shack';
 
   const fetchFranchisee = useCallback(async () => {
     if (!id) return;
@@ -344,105 +256,8 @@ export default function FranchiseeDetailPage() {
   }, [fetchInvoices]);
 
   useEffect(() => {
-    const fetchSavedSlerpForSelectedWeek = async () => {
-      if (!id || !franchisee || franchisee.slerp_percentage == null) {
-        setSavedSlerpForSelectedWeek(null);
-        return;
-      }
-      const currentWeekEnd = format(
-        endOfWeek(new Date(weekDate), { weekStartsOn: 1 }),
-        'yyyy-MM-dd'
-      );
-      const currentWeekStart = format(
-        startOfWeek(new Date(weekDate), { weekStartsOn: 1 }),
-        'yyyy-MM-dd'
-      );
-      const { data, error } = await supabase
-        .from('weekly_reports')
-        .select('gross_revenue')
-        .eq('franchisee_id', id)
-        .eq('platform', 'slerp')
-        .eq('week_start_date', currentWeekStart)
-        .eq('week_end_date', currentWeekEnd)
-        .eq('brand', slerpBrand);
-      if (error) {
-        setSavedSlerpForSelectedWeek(null);
-        return;
-      }
-      const gross = Math.round(
-        ((data || []) as Array<{ gross_revenue: number | null }>).reduce(
-          (sum, row) => sum + Number(row.gross_revenue || 0),
-          0
-        ) * 100
-      ) / 100;
-      if (gross <= 0) {
-        setSavedSlerpForSelectedWeek(null);
-        return;
-      }
-      const pct = getPlatformFeeRate(franchisee, 'slerp');
-      const fee = Math.round(gross * (pct / 100) * 100) / 100;
-      setSavedSlerpForSelectedWeek({ gross, fee });
-    };
-    fetchSavedSlerpForSelectedWeek();
-  }, [id, franchisee, supabase, weekDate]);
-
-  useEffect(() => {
-    setSelectedCatchUpInvoiceIds((current) =>
-      current.filter((invoiceId) =>
-        invoices.some(
-          (invoice) =>
-            invoice.id === invoiceId &&
-            invoice.status !== 'paid' &&
-            invoice.status !== 'processing' &&
-            (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0)
-        )
-      )
-    );
-  }, [invoices]);
-
-  const fetchEmailDrafts = useCallback(async () => {
-    if (!id) return;
-    const { data } = await supabase
-      .from('email_drafts')
-      .select('id, invoice_id, to_email, subject, body, status, created_at')
-      .eq('franchisee_id', id)
-      .eq('status', 'draft')
-      .order('created_at', { ascending: false });
-    setEmailDrafts((data as EmailDraft[]) ?? []);
-  }, [id, supabase]);
-
-  useEffect(() => {
-    fetchEmailDrafts();
-  }, [fetchEmailDrafts]);
-
-  useEffect(() => {
     fetchPlatformRevenue();
   }, [fetchPlatformRevenue]);
-
-  const approveDraft = async (draftId: string) => {
-    setApprovingDraftId(draftId);
-    try {
-      const res = await fetch(`/api/approve-email-draft/${draftId}`, { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json();
-        alert(data.error || 'Failed to send email');
-      } else {
-        await fetchEmailDrafts();
-      }
-    } finally {
-      setApprovingDraftId(null);
-    }
-  };
-
-  const discardDraft = async (draftId: string) => {
-    setDiscardingDraftId(draftId);
-    try {
-      await fetch(`/api/discard-email-draft/${draftId}`, { method: 'POST' });
-      await fetchEmailDrafts();
-    } finally {
-      setDiscardingDraftId(null);
-    }
-  };
 
   const setupBacs = async (isReminder = false) => {
     if (!id) return;
@@ -496,152 +311,6 @@ export default function FranchiseeDetailPage() {
     }
   };
 
-  const uploadBrandOptions =
-    Array.isArray(franchisee?.brands) && franchisee.brands.length > 0
-      ? franchisee.brands
-      : [...BRAND_OPTIONS];
-
-  /** For Deliveroo: use statement breakdown if present, else synthesize one (total under Wing Shack) so three lines always show. */
-  const getDeliverooBreakdown = (row: UploadRow): Record<string, number> | undefined => {
-    if (row.platform !== 'deliveroo' || !row.result) return undefined;
-    const bd = row.result.deliveroo_brand_breakdown;
-    if (bd && Object.keys(bd).length > 0) return bd;
-    const rev = row.result.gross_revenue ?? (parseFloat(row.editableRevenue || '0') || 0);
-    return { 'Eggs n Stuff': 0, 'SMSH BN': 0, 'Wing Shack': Math.round(rev * 100) / 100 };
-  };
-
-  const isPercentageBased =
-    franchisee?.payment_model === 'percentage' ||
-    franchisee?.payment_model === 'percentage_per_platform';
-
-  const handleResult = (result: PlatformResult, rowId: string) => {
-    setUploadRows((prev) =>
-      prev.map((row) =>
-        row.rowId === rowId
-          ? {
-              ...row,
-              result,
-              editableRevenue: result.gross_revenue.toString(),
-              brand:
-                row.platform === 'deliveroo'
-                  ? '__multibrand__'
-                  : row.brand?.trim() || uploadBrandOptions[0] || '',
-            }
-          : row
-      )
-    );
-  };
-  const handleClear = (rowId: string) => {
-    setUploadRows((prev) =>
-      prev.map((row) =>
-        row.rowId === rowId ? { ...row, result: null, editableRevenue: '' } : row
-      )
-    );
-  };
-  const addUploadRow = (platform: Platform) => {
-    setUploadRows((prev) => [
-      ...prev,
-      {
-        rowId: `row-${Date.now()}-${platform}`,
-        platform,
-        brand: uploadBrandOptions[0] || '',
-        result: null,
-        editableRevenue: '',
-      },
-    ]);
-  };
-  const removeUploadRow = (rowId: string) => {
-    setUploadRows((prev) => prev.filter((row) => row.rowId !== rowId));
-  };
-
-  const weekStart = startOfWeek(new Date(weekDate), { weekStartsOn: 1 });
-  const weekEnd = endOfWeek(new Date(weekDate), { weekStartsOn: 1 });
-  const weekStartStr = format(weekStart, 'yyyy-MM-dd');
-  const weekEndStr = format(weekEnd, 'yyyy-MM-dd');
-  useEffect(() => {
-    const loadManualWeekDefaults = async () => {
-      if (!id) return;
-      const { data, error } = await supabase
-        .from('weekly_reports')
-        .select('platform, gross_revenue')
-        .eq('franchisee_id', id)
-        .eq('week_start_date', weekStartStr)
-        .eq('week_end_date', weekEndStr)
-        .in('platform', ['deliveroo', 'ubereats', 'justeat', 'slerp']);
-      if (error) return;
-      const by: Record<Platform, number> = { deliveroo: 0, ubereats: 0, justeat: 0, slerp: 0 };
-      (data || []).forEach((r: { platform: string; gross_revenue: number | null }) => {
-        if (r.platform in by) {
-          by[r.platform as Platform] += Number(r.gross_revenue || 0);
-        }
-      });
-      setManualWeekInputs({
-        deliveroo: by.deliveroo ? String(Math.round(by.deliveroo * 100) / 100) : '',
-        ubereats: by.ubereats ? String(Math.round(by.ubereats * 100) / 100) : '',
-        justeat: by.justeat ? String(Math.round(by.justeat * 100) / 100) : '',
-        slerp: by.slerp ? String(Math.round(by.slerp * 100) / 100) : '',
-      });
-    };
-    loadManualWeekDefaults();
-  }, [id, supabase, weekStartStr, weekEndStr]);
-  const selectedSlerpSalesPeriodStart = weekStartStr;
-  const selectedSlerpSalesPeriodEnd = weekEndStr;
-  const computedSlerpPreview: ComputedSlerpPreviewRow[] = useMemo(() => {
-    const pct = getPlatformFeeRate(franchisee, 'slerp');
-    const franchiseeSharePct = Math.max(0, 100 - pct);
-    const round2 = (n: number) => Math.round(n * 100) / 100;
-    return slerpPreview.map((p) => {
-      const payoutAmount = Number(p.grossRevenue || 0);
-      if (slerpUseStripePayoutTruth && franchiseeSharePct > 0) {
-        const invoiceGrossRevenue = round2(payoutAmount / (franchiseeSharePct / 100));
-        const invoiceFeeAmount = round2(invoiceGrossRevenue * (pct / 100));
-        return { ...p, payoutAmount, invoiceGrossRevenue, invoiceFeeAmount };
-      }
-      const invoiceGrossRevenue = round2(payoutAmount);
-      const invoiceFeeAmount = round2(invoiceGrossRevenue * (pct / 100));
-      return { ...p, payoutAmount, invoiceGrossRevenue, invoiceFeeAmount };
-    });
-  }, [franchisee, slerpPreview, slerpUseStripePayoutTruth]);
-  const slerpPreviewForSelectedWeek =
-    computedSlerpPreview.find(
-      (p) =>
-        p.weekStart === selectedSlerpSalesPeriodStart &&
-        p.weekEnd === selectedSlerpSalesPeriodEnd
-    ) ?? null;
-  const slerpReviewGross = slerpPreviewForSelectedWeek
-    ? Number(slerpPreviewForSelectedWeek.invoiceGrossRevenue || 0)
-    : Number(savedSlerpForSelectedWeek?.gross || 0);
-  const slerpReviewFee = slerpPreviewForSelectedWeek
-    ? Number(slerpPreviewForSelectedWeek.invoiceFeeAmount || 0)
-    : Number(savedSlerpForSelectedWeek?.fee || 0);
-  const rowsWithData = uploadRows.filter((r) => r.result !== null);
-  const totalGross = rowsWithData.reduce((sum, r) => {
-    const bd = getDeliverooBreakdown(r);
-    if (bd) return sum + Object.values(bd).reduce((a, b) => a + b, 0);
-    const val = parseFloat(r.editableRevenue || '0');
-    return sum + (isNaN(val) ? 0 : val);
-  }, 0);
-  const feeRate = franchisee?.percentage_rate ?? 6;
-  const feeAmount =
-    franchisee?.payment_model === 'percentage_per_platform'
-      ? Math.round(
-          rowsWithData.reduce(
-            (sum, r) => {
-              const bd = getDeliverooBreakdown(r);
-              if (bd) {
-                const rowTotal = Object.values(bd).reduce((a, b) => a + b, 0);
-                return sum + rowTotal * (getPlatformFeeRate(franchisee, r.platform) / 100);
-              }
-              const rev = parseFloat(r.editableRevenue || '0') || 0;
-              return sum + rev * (getPlatformFeeRate(franchisee, r.platform) / 100);
-            },
-            0
-          ) * 100
-        ) / 100
-      : Math.round(totalGross * (feeRate / 100) * 100) / 100;
-  const reviewTotalGross = Math.round((totalGross + slerpReviewGross) * 100) / 100;
-  const reviewFeeAmount = Math.round((feeAmount + slerpReviewFee) * 100) / 100;
-
   // Metrics (from all invoices + platform revenue)
   const totalGrossRevenue = invoices.reduce((s, i) => s + Number(i.total_gross_revenue || 0), 0);
   const totalFees = invoices.reduce((s, i) => s + Number(i.fee_amount || 0), 0);
@@ -672,40 +341,6 @@ export default function FranchiseeDetailPage() {
   };
   const formatInvoicePeriodLabel = (invoice: Pick<Invoice, 'week_start_date' | 'week_end_date'>) =>
     isMonthlyFixedSite ? formatMonthLabel(invoice.week_start_date) : formatWeekRange(invoice.week_start_date, invoice.week_end_date);
-  const catchUpEligibleInvoices = useMemo(
-    () =>
-      invoices.filter(
-        (invoice) =>
-          invoice.status !== 'paid' &&
-          invoice.status !== 'processing' &&
-          (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0)
-      ),
-    [invoices]
-  );
-  const catchUpSelectedInvoices = useMemo(
-    () =>
-      catchUpEligibleInvoices
-        .filter((invoice) => selectedCatchUpInvoiceIds.includes(invoice.id))
-        .sort((a, b) => {
-          if (a.week_end_date === b.week_end_date) return b.week_start_date.localeCompare(a.week_start_date);
-          return b.week_end_date.localeCompare(a.week_end_date);
-        }),
-    [catchUpEligibleInvoices, selectedCatchUpInvoiceIds]
-  );
-  const catchUpPreviewItems: InvoiceLineItem[] = catchUpSelectedInvoices.map((invoice) => ({
-    label: formatInvoicePeriodLabel(invoice),
-    period_start: invoice.week_start_date,
-    period_end: invoice.week_end_date,
-    gross_revenue: Number(invoice.total_gross_revenue ?? 0),
-    fee_amount: Number(invoice.fee_amount ?? 0),
-    source_invoice_id: invoice.id,
-    source_invoice_number: invoice.invoice_number,
-  }));
-  const catchUpSelectedTotalGross = catchUpPreviewItems.reduce((sum, item) => sum + Number(item.gross_revenue ?? 0), 0);
-  const catchUpSelectedTotalFee = catchUpPreviewItems.reduce((sum, item) => sum + Number(item.fee_amount ?? 0), 0);
-  const allEligibleCatchUpSelected =
-    catchUpEligibleInvoices.length > 0 &&
-    catchUpEligibleInvoices.every((invoice) => selectedCatchUpInvoiceIds.includes(invoice.id));
   const isMaidstoneSite = useMemo(() => {
     if (!franchisee) return false;
     const location = (franchisee.location || '').toLowerCase();
@@ -749,213 +384,6 @@ export default function FranchiseeDetailPage() {
     const paymentsRemaining = amountLeft <= 0 ? 0 : Math.ceil(amountLeft / monthlyFee);
     return { amountLeft, monthsApplied, paymentsRemaining };
   }, [isMonthlyFixedSite, isMaidstoneSite, franchisee?.monthly_fee, invoiceDebtSnapshots, maidstoneTrackerInitialArrears]);
-
-  const handleSaveUpload = async () => {
-    if (!id || !franchisee) return;
-    if (rowsWithData.length === 0) {
-      setUploadError('Please upload at least one platform report');
-      return;
-    }
-    if (!isPercentageBased) {
-      setUploadError('Upload is only available for percentage-based franchisees.');
-      return;
-    }
-    for (const row of rowsWithData) {
-      const isDeliverooWithResult = row.platform === 'deliveroo' && row.result;
-      if (!isDeliverooWithResult && !row.brand?.trim()) {
-        setUploadError(`Please select a brand for ${PLATFORM_LABELS[row.platform]}.`);
-        return;
-      }
-    }
-    setSaving(true);
-    setUploadError('');
-    try {
-      for (const row of rowsWithData) {
-        const result = row.result!;
-        const bd = getDeliverooBreakdown(row);
-        const hasBreakdown = Boolean(bd && row.platform === 'deliveroo');
-
-        if (hasBreakdown && bd) {
-          const filePath = `reports/${id}/${weekStartStr}/deliveroo-multibrand-${result.file.name}`;
-          await supabase.storage.from('invoicing').upload(filePath, result.file, { upsert: true });
-          for (const [brand, amount] of Object.entries(bd)) {
-            await supabase
-              .from('weekly_reports')
-              .delete()
-              .eq('franchisee_id', id)
-              .eq('brand', brand)
-              .eq('platform', 'deliveroo')
-              .eq('week_start_date', weekStartStr)
-              .eq('week_end_date', weekEndStr);
-            const { data: insertedReport, error: insertError } = await supabase.from('weekly_reports').insert({
-              franchisee_id: id,
-              brand,
-              platform: 'deliveroo',
-              week_start_date: weekStartStr,
-              week_end_date: weekEndStr,
-              gross_revenue: Math.round(amount * 100) / 100,
-              file_path: filePath,
-              file_type: result.file_type,
-            }).select('id').single();
-            if (insertError) throw insertError;
-            if (insertedReport?.id) {
-              const totalGrossForStatement = Object.values(bd).reduce((a, b) => a + b, 0);
-              const ratio = totalGrossForStatement > 0 ? amount / totalGrossForStatement : 0;
-              await supabase.from('report_financials').insert({
-                weekly_report_id: insertedReport.id,
-                platform_commission: result.platform_commission != null ? Math.round(result.platform_commission * ratio * 100) / 100 : null,
-                delivery_fee: result.delivery_fee != null ? Math.round(result.delivery_fee * ratio * 100) / 100 : null,
-                restaurant_offers: result.restaurant_offers != null ? Math.round(result.restaurant_offers * ratio * 100) / 100 : null,
-                platform_offers: result.platform_offers != null ? Math.round(result.platform_offers * ratio * 100) / 100 : null,
-                adjustments: result.adjustments != null ? Math.round(result.adjustments * ratio * 100) / 100 : null,
-                net_payout: result.net_payout != null ? Math.round(result.net_payout * ratio * 100) / 100 : null,
-                order_count: result.order_count != null ? Math.round(result.order_count * ratio) : null,
-              });
-            }
-          }
-        } else {
-          const revenue = parseFloat(row.editableRevenue || '0');
-          const brand = row.brand.trim();
-          await supabase
-            .from('weekly_reports')
-            .delete()
-            .eq('franchisee_id', id)
-            .eq('brand', brand)
-            .eq('platform', row.platform)
-            .eq('week_start_date', weekStartStr)
-            .eq('week_end_date', weekEndStr);
-          const filePath = `reports/${id}/${weekStartStr}/${brand}-${row.platform}-${result.file.name}`;
-          await supabase.storage.from('invoicing').upload(filePath, result.file, { upsert: true });
-          const { data: insertedReport, error: insertError } = await supabase.from('weekly_reports').insert({
-            franchisee_id: id,
-            brand,
-            platform: row.platform,
-            week_start_date: weekStartStr,
-            week_end_date: weekEndStr,
-            gross_revenue: revenue,
-            file_path: filePath,
-            file_type: result.file_type,
-          }).select('id').single();
-          if (insertError) throw insertError;
-          if (insertedReport?.id) {
-            await supabase.from('report_financials').insert({
-              weekly_report_id: insertedReport.id,
-              platform_commission: result.platform_commission ?? null,
-              delivery_fee: result.delivery_fee ?? null,
-              restaurant_offers: result.restaurant_offers ?? null,
-              platform_offers: result.platform_offers ?? null,
-              adjustments: result.adjustments ?? null,
-              net_payout: result.net_payout ?? null,
-              order_count: result.order_count ?? null,
-            });
-          }
-        }
-      }
-      const franchiseeBrands = Array.isArray(franchisee.brands) && franchisee.brands.length > 0
-        ? franchisee.brands
-        : null;
-      const brandsInBatch = [
-        ...new Set(
-          rowsWithData.flatMap((r) => {
-            const bd = getDeliverooBreakdown(r);
-            if (bd && r.platform === 'deliveroo') return Object.keys(bd);
-            return r.brand.trim() ? [r.brand.trim()] : [];
-          })
-        ),
-      ].filter(Boolean).filter((b) => !franchiseeBrands || franchiseeBrands.includes(b as string));
-
-      // One combined Hungry Tum invoice per franchisee per week (all brands), including Wing Shack Direct.
-      const [aggregatorReportsRes, slerpReportsRes] = await Promise.all([
-        supabase
-          .from('weekly_reports')
-          .select('platform, gross_revenue')
-          .eq('franchisee_id', id)
-          .eq('week_start_date', weekStartStr)
-          .eq('week_end_date', weekEndStr)
-          .in('platform', ['deliveroo', 'ubereats', 'justeat']),
-        supabase
-          .from('weekly_reports')
-          .select('platform, gross_revenue')
-          .eq('franchisee_id', id)
-          .eq('platform', 'slerp')
-          .eq('week_start_date', weekStartStr)
-          .eq('week_end_date', weekEndStr),
-      ]);
-      const allReports = [...(aggregatorReportsRes.data || []), ...(slerpReportsRes.data || [])];
-      const totalGrossAll =
-        (allReports || []).reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0);
-      const totalFeeAll =
-        franchisee.payment_model === 'percentage_per_platform'
-          ? (allReports || []).reduce(
-              (s, r) =>
-                s +
-                Math.round(
-                  Number(r.gross_revenue ?? 0) * (getPlatformFeeRate(franchisee, r.platform) / 100) * 100
-                ) / 100,
-              0
-            )
-          : Math.round(totalGrossAll * ((franchisee.percentage_rate ?? 6) / 100) * 100) / 100;
-      const roundedGross = Math.round(totalGrossAll * 100) / 100;
-      const roundedFee = Math.round(totalFeeAll * 100) / 100;
-      const effectivePct =
-        roundedGross > 0 ? Math.round((roundedFee / roundedGross) * 10000) / 100 : (franchisee.percentage_rate ?? 6);
-
-      const { data: existingInvoices } = await supabase
-        .from('invoices')
-        .select('id, status, created_at')
-        .eq('franchisee_id', id)
-        .eq('week_start_date', weekStartStr)
-        .eq('week_end_date', weekEndStr)
-        .order('created_at', { ascending: true });
-      const toKeep = existingInvoices?.[0];
-      const toDelete = (existingInvoices || []).slice(1);
-
-      for (const inv of toDelete) {
-        await supabase.from('invoices').delete().eq('id', inv.id);
-      }
-      if (toKeep) {
-        const { error: updateError } = await supabase
-          .from('invoices')
-          .update({
-            total_gross_revenue: roundedGross,
-            fee_percentage: effectivePct,
-            fee_amount: roundedFee,
-            brand: null,
-            brands: brandsInBatch.length > 0 ? brandsInBatch : null,
-          })
-          .eq('id', toKeep.id);
-        if (updateError) throw updateError;
-      } else {
-        const { error: insertInvoiceError } = await supabase.from('invoices').insert({
-          franchisee_id: id,
-          brand: null,
-          brands: brandsInBatch.length > 0 ? brandsInBatch : null,
-          week_start_date: weekStartStr,
-          week_end_date: weekEndStr,
-          total_gross_revenue: roundedGross,
-          fee_percentage: effectivePct,
-          fee_amount: roundedFee,
-          status: 'draft',
-        });
-        if (insertInvoiceError) throw insertInvoiceError;
-      }
-      setUploadSuccess(true);
-      setUploadRows(AGGREGATOR_PLATFORMS.map((platform) => ({
-        rowId: `init-${platform}-${Date.now()}`,
-        platform,
-        brand: '',
-        result: null,
-        editableRevenue: '',
-      })));
-      fetchInvoices();
-      fetchPlatformRevenue();
-      setActiveTab('invoices');
-      setTimeout(() => setUploadSuccess(false), 3000);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Failed to save reports');
-    }
-    setSaving(false);
-  };
 
   const saveManualReport = async (invoice: InvoiceWithFranchisee, platformOverride?: AggregatorPlatform) => {
     if (!id || !franchisee) return;
@@ -1028,39 +456,6 @@ export default function FranchiseeDetailPage() {
     }
   };
 
-  const handleSlerpFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    setSlerpFile(file ?? null);
-    setSlerpPreview([]);
-    setSlerpError('');
-    if (!file || !id) return;
-    setSlerpParsing(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('franchiseeId', id);
-      formData.append('brand', slerpBrand);
-      const res = await fetch('/api/parse-slerp', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Parse failed');
-      setSlerpPreview(
-        (data.preview ?? []).map((p: { weekStart: string; weekEnd: string; payoutDate: string; grossRevenue: number; feePercentage: number; feeAmount: number }) => ({
-          weekStart: p.weekStart,
-          weekEnd: p.weekEnd,
-          payoutDate: p.payoutDate,
-          grossRevenue: p.grossRevenue,
-          feePercentage: p.feePercentage,
-          feeAmount: p.feeAmount,
-        }))
-      );
-      if (data.errors?.length) setSlerpError(data.errors.join('; '));
-    } catch (err) {
-      setSlerpError(err instanceof Error ? err.message : 'Failed to parse Slerp file');
-    } finally {
-      setSlerpParsing(false);
-    }
-  };
-
   const recalculateInvoiceForWeek = async (weekStartStr: string, weekEndStr: string) => {
     if (!id || !franchisee) return;
 
@@ -1113,7 +508,7 @@ export default function FranchiseeDetailPage() {
       const franchiseeBrands = Array.isArray(franchisee.brands) && franchisee.brands.length > 0
         ? franchisee.brands
         : null;
-      const invoiceBrands = franchiseeBrands && franchiseeBrands.includes(slerpBrand) ? [slerpBrand] : null;
+      const invoiceBrands = franchiseeBrands && franchiseeBrands.includes('Wing Shack') ? ['Wing Shack'] : null;
       await supabase.from('invoices').insert({
         franchisee_id: id,
         brand: null,
@@ -1144,99 +539,6 @@ export default function FranchiseeDetailPage() {
       .eq('id', invoiceToKeep.id);
   };
 
-  const saveManualWeekFigures = async () => {
-    if (!id) return;
-    setManualWeekSaving(true);
-    setManualWeekError('');
-    try {
-      const entries: Array<{ platform: Platform; amount: number }> = (['deliveroo', 'ubereats', 'justeat', 'slerp'] as Platform[]).map((platform) => {
-        const raw = manualWeekInputs[platform] ?? '';
-        const amount = parseFloat(raw.replace(/[£,\s]/g, ''));
-        return { platform, amount: Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) / 100 : 0 };
-      });
-
-      for (const { platform, amount } of entries) {
-        const { error: deleteErr } = await supabase
-          .from('weekly_reports')
-          .delete()
-          .eq('franchisee_id', id)
-          .eq('week_start_date', weekStartStr)
-          .eq('week_end_date', weekEndStr)
-          .eq('platform', platform);
-        if (deleteErr) throw deleteErr;
-
-        const manualBrand =
-          platform === 'slerp'
-            ? slerpBrand
-            : franchisee?.brands?.[0] ?? slerpBrand;
-        const { error: insertErr } = await supabase.from('weekly_reports').insert({
-          franchisee_id: id,
-          brand: manualBrand,
-          platform,
-          week_start_date: weekStartStr,
-          week_end_date: weekEndStr,
-          gross_revenue: amount,
-          file_path: null,
-          file_type: 'manual' as const,
-        });
-        if (insertErr) throw insertErr;
-      }
-
-      await recalculateInvoiceForWeek(weekStartStr, weekEndStr);
-      fetchInvoices();
-      fetchPlatformRevenue();
-      setManualWeekSuccess(true);
-      setTimeout(() => setManualWeekSuccess(false), 2500);
-    } catch (err) {
-      setManualWeekError(err instanceof Error ? err.message : 'Failed to save manual figures');
-    } finally {
-      setManualWeekSaving(false);
-    }
-  };
-
-  const handleSaveSlerpReports = async () => {
-    if (!id || slerpPreview.length === 0) return;
-    setSlerpSaving(true);
-    setSlerpError('');
-    try {
-      const res = await fetch('/api/save-slerp-reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          franchiseeId: id,
-          brand: slerpBrand,
-          sourceMode: slerpUseStripePayoutTruth ? 'stripe_payout_72' : 'invoice_gross',
-          payWeeks: slerpPreview.map((p) => ({ weekStart: p.weekStart, weekEnd: p.weekEnd, grossRevenue: p.grossRevenue })),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Save failed');
-
-      const impactedWeeks = [
-        ...new Set(
-          slerpPreview.map((p) => `${p.weekStart}|${p.weekEnd}`)
-        ),
-      ];
-      await Promise.all(
-        impactedWeeks.map((k) => {
-          const [weekStart, weekEnd] = k.split('|');
-          return recalculateInvoiceForWeek(weekStart, weekEnd);
-        })
-      );
-
-      setSlerpSuccess(true);
-      setSlerpPreview([]);
-      setSlerpFile(null);
-      fetchInvoices();
-      fetchPlatformRevenue();
-      setTimeout(() => setSlerpSuccess(false), 3000);
-    } catch (err) {
-      setSlerpError(err instanceof Error ? err.message : 'Failed to save');
-    } finally {
-      setSlerpSaving(false);
-    }
-  };
-
   const fetchReports = async (
     invoiceId: string,
     weekStart: string,
@@ -1264,47 +566,6 @@ export default function FranchiseeDetailPage() {
           })
         : data ?? [];
     setReports((prev) => ({ ...prev, [invoiceId]: filtered }));
-  };
-
-  const toggleCatchUpInvoiceSelection = (invoiceId: string) => {
-    setSelectedCatchUpInvoiceIds((current) =>
-      current.includes(invoiceId)
-        ? current.filter((id) => id !== invoiceId)
-        : [...current, invoiceId]
-    );
-  };
-
-  const toggleSelectAllCatchUpInvoices = () => {
-    setSelectedCatchUpInvoiceIds(
-      allEligibleCatchUpSelected ? [] : catchUpEligibleInvoices.map((invoice) => invoice.id)
-    );
-  };
-
-  const createCatchUpInvoice = async () => {
-    if (!id || catchUpSelectedInvoices.length === 0) return;
-    setCreatingCatchUpInvoice(true);
-    try {
-      const response = await fetch('/api/create-catch-up-invoice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ franchiseeId: id, invoiceIds: catchUpSelectedInvoices.map((invoice) => invoice.id) }),
-        credentials: 'include',
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.invoice?.id) {
-        alert(data.error || 'Failed to create catch-up invoice');
-        return;
-      }
-      await fetchInvoices();
-      setSelectedCatchUpInvoiceIds([]);
-      setShowCatchUpPreview(false);
-      setExpandedId(data.invoice.id);
-      await previewInvoicePdf(data.invoice.id);
-    } catch {
-      alert('Failed to create catch-up invoice');
-    } finally {
-      setCreatingCatchUpInvoice(false);
-    }
   };
 
   const toggleExpand = (invoice: InvoiceWithFranchisee) => {
@@ -1384,6 +645,39 @@ export default function FranchiseeDetailPage() {
       alert('Failed to generate PDF');
     } finally {
       setPreviewingPdfId(null);
+    }
+  };
+
+  const regenerateAllInvoicePdfs = async () => {
+    if (invoices.length === 0) return;
+    setRegeneratingAllPdfs(true);
+    try {
+      let successCount = 0;
+      let failCount = 0;
+      for (const invoice of invoices) {
+        try {
+          const response = await fetch('/api/generate-invoice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ invoiceId: invoice.id }),
+          });
+          if (response.ok) {
+            successCount += 1;
+          } else {
+            failCount += 1;
+          }
+        } catch {
+          failCount += 1;
+        }
+      }
+      if (failCount === 0) {
+        setMonthlyInvoiceMessage(`Regenerated ${successCount} invoice PDF${successCount === 1 ? '' : 's'}.`);
+        setMonthlyInvoiceError('');
+      } else {
+        setMonthlyInvoiceError(`Regenerated ${successCount} PDF${successCount === 1 ? '' : 's'}, ${failCount} failed.`);
+      }
+    } finally {
+      setRegeneratingAllPdfs(false);
     }
   };
 
@@ -1790,7 +1084,7 @@ export default function FranchiseeDetailPage() {
         </div>
         <div className="rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wider text-slate-400 dark:text-neutral-400">Outstanding fees</p>
-          <p className="mt-1 text-xl font-bold text-amber-600 dark:text-amber-400">
+          <p className="mt-1 text-xl font-bold text-primary dark:text-primary">
             {loadingInvoices ? '—' : formatCurrency(outstandingFees)}
           </p>
         </div>
@@ -1801,10 +1095,10 @@ export default function FranchiseeDetailPage() {
           </p>
         </div>
         {debtTracker && (
-          <div className="rounded-xl border border-orange-200 dark:border-orange-800 bg-orange-50/40 dark:bg-orange-900/10 p-4 shadow-sm">
-            <p className="text-xs font-medium uppercase tracking-wider text-orange-700 dark:text-orange-300">Maidstone debt tracker</p>
-            <p className="mt-1 text-xl font-bold text-orange-800 dark:text-orange-200">{formatCurrency(debtTracker.amountLeft)} left</p>
-            <p className="mt-1 text-xs text-orange-700 dark:text-orange-300">
+          <div className="rounded-xl border border-primary/20 dark:border-primary/30 bg-primary/5 dark:bg-primary/10 p-4 shadow-sm">
+            <p className="text-xs font-medium uppercase tracking-wider text-primary-dark dark:text-primary">Maidstone debt tracker</p>
+            <p className="mt-1 text-xl font-bold text-primary-dark dark:text-primary">{formatCurrency(debtTracker.amountLeft)} left</p>
+            <p className="mt-1 text-xs text-primary-dark dark:text-primary">
               {debtTracker.monthsApplied} waived {debtTracker.monthsApplied === 1 ? 'month' : 'months'} applied · {debtTracker.paymentsRemaining} payments remaining
             </p>
           </div>
@@ -1840,441 +1134,8 @@ export default function FranchiseeDetailPage() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="mb-6 border-b border-slate-200 dark:border-neutral-600">
-        <nav className="flex gap-6">
-          <button
-            type="button"
-            onClick={() => setActiveTab('upload')}
-            className={cn(
-              'flex items-center gap-2 border-b-2 pb-3 text-sm font-medium transition-colors',
-              activeTab === 'upload'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-slate-500 dark:text-neutral-400 hover:text-slate-700 dark:hover:text-neutral-200'
-            )}
-          >
-            <Upload className="h-4 w-4" />
-            Upload reports
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('invoices')}
-            className={cn(
-              'flex items-center gap-2 border-b-2 pb-3 text-sm font-medium transition-colors',
-              activeTab === 'invoices'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-slate-500 dark:text-neutral-400 hover:text-slate-700 dark:hover:text-neutral-200'
-            )}
-          >
-            <FileText className="h-4 w-4" />
-            Invoices
-          </button>
-        </nav>
-      </div>
 
-      {activeTab === 'upload' && (
-        <div className="mx-auto max-w-4xl">
-          {franchisee.payment_model !== 'percentage' && (
-            <p className="mb-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 p-3 text-sm text-amber-800 dark:text-amber-200">
-              Available for percentage-based fee models only.
-            </p>
-          )}
-
-          {uploadSuccess && (
-            <div className="mb-6 flex items-center gap-2 rounded-lg bg-green-50 p-4 text-sm text-green-800">
-              <CheckCircle className="h-5 w-5 flex-shrink-0" />
-              Reports saved and invoice created. View it in the Invoices tab.
-            </div>
-          )}
-
-          {uploadError && (
-            <div className="mb-6 flex items-center gap-2 rounded-lg bg-red-50 p-4 text-sm text-red-700">
-              <AlertCircle className="h-5 w-5 flex-shrink-0" />
-              {uploadError}
-            </div>
-          )}
-
-          <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-neutral-100">Week</h2>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">Week starting (Monday)</label>
-              <input
-                type="date"
-                value={weekDate}
-                onChange={(e) => setWeekDate(e.target.value)}
-                className="w-full max-w-xs rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              <p className="mt-1 text-xs text-slate-400 dark:text-neutral-400">
-                {formatDate(weekStartStr)} – {formatDate(weekEndStr)}
-              </p>
-            </div>
-          </div>
-
-          <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
-            <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-neutral-100">Upload platform reports</h2>
-            <p className="mb-3 text-sm text-slate-500 dark:text-neutral-400">
-              Upload platform reports and choose a brand for each.
-            </p>
-            <div className="grid gap-6 sm:grid-cols-3">
-              {AGGREGATOR_PLATFORMS.map((platform) => {
-                const platformRows = uploadRows.filter((r) => r.platform === platform);
-                return (
-                  <div key={platform} className="space-y-3">
-                    <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-neutral-300">
-                      {getPlatformLogo(platform) ? (
-                        <img src={getPlatformLogo(platform)} alt="" className="h-5 w-5 object-contain" />
-                      ) : null}
-                      {PLATFORM_LABELS[platform]}
-                    </h3>
-                    {platformRows.map((row) => (
-                      <div key={row.rowId} className="flex flex-col gap-2 rounded-lg border border-slate-100 dark:border-neutral-600 bg-slate-50/50 dark:bg-neutral-700/50 p-2">
-                        <div className="flex items-center gap-2">
-                          {platform === 'deliveroo' ? (
-                            <span className="text-xs text-slate-500 dark:text-neutral-400">Brands from statement</span>
-                          ) : (
-                            <select
-                              value={row.brand}
-                              onChange={(e) =>
-                                setUploadRows((prev) =>
-                                  prev.map((r) =>
-                                    r.rowId === row.rowId ? { ...r, brand: e.target.value } : r
-                                  )
-                                )
-                              }
-                              className="rounded border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-2 py-1 text-xs focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                            >
-                              <option value="">Brand</option>
-                              {uploadBrandOptions.map((b) => (
-                                <option key={b} value={b}>{b}</option>
-                              ))}
-                            </select>
-                          )}
-                          {platformRows.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeUploadRow(row.rowId)}
-                              className="ml-auto rounded p-1 text-slate-400 dark:text-neutral-400 hover:bg-slate-200 dark:hover:bg-neutral-600 hover:text-slate-600 dark:hover:text-neutral-100"
-                              title="Remove this report"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                        <FileUpload
-                          platform={platform}
-                          onResult={(result) => handleResult(result, row.rowId)}
-                          onClear={() => handleClear(row.rowId)}
-                          result={
-                            row.result
-                              ? {
-                                  gross_revenue: row.result.gross_revenue,
-                                  file_name: row.result.file_name,
-                                  confidence: row.result.confidence,
-                                }
-                              : null
-                          }
-                        />
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => addUploadRow(platform)}
-                      className="w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 dark:border-neutral-600 py-2 text-xs font-medium text-slate-500 dark:text-neutral-400 hover:border-primary hover:text-primary"
-                    >
-                      {getPlatformLogo(platform) ? (
-                        <img src={getPlatformLogo(platform)} alt="" className="h-4 w-4 object-contain" />
-                      ) : null}
-                      + Add report for {PLATFORM_LABELS[platform]}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
-            <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-neutral-100">Manual weekly figures</h2>
-            <p className="mb-4 text-sm text-slate-500 dark:text-neutral-400">
-              Edit gross revenue for any platform for this week. Existing values are pre-filled; if you leave a value unchanged it stays unchanged.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {(['deliveroo', 'ubereats', 'justeat', 'slerp'] as Platform[]).map((platform) => (
-                <label key={`manual-week-${platform}`} className="rounded-lg border border-slate-200 dark:border-neutral-600 p-3">
-                  <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">
-                    {PLATFORM_LABELS[platform]}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500 dark:text-neutral-400">£</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={manualWeekInputs[platform]}
-                      onChange={(e) => {
-                        setManualWeekInputs((prev) => ({ ...prev, [platform]: e.target.value }));
-                        setManualWeekError('');
-                      }}
-                      className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-xs text-slate-500 dark:text-neutral-400">
-                    <span>Fee ({getPlatformFeeRate(franchisee, platform)}%)</span>
-                    <span>
-                      {formatCurrency(
-                        Math.round(
-                          (parseFloat((manualWeekInputs[platform] || '0').replace(/[£,\s]/g, '')) || 0) *
-                            (getPlatformFeeRate(franchisee, platform) / 100) *
-                            100
-                        ) / 100
-                      )}
-                    </span>
-                  </div>
-                </label>
-              ))}
-            </div>
-            {manualWeekError && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{manualWeekError}</p>}
-            {manualWeekSuccess && <p className="mt-3 text-sm text-green-600 dark:text-green-400">Manual figures saved and invoice updated.</p>}
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={saveManualWeekFigures}
-                disabled={manualWeekSaving}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
-              >
-                {manualWeekSaving ? 'Saving…' : 'Save manual figures for this week'}
-              </button>
-            </div>
-          </div>
-
-          {franchisee?.slerp_percentage != null && franchisee.brands?.includes('Wing Shack') && (
-            <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
-              <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-neutral-100">Wing Shack Direct</h2>
-              <p className="mb-3 text-sm text-slate-500 dark:text-neutral-400">
-                Upload the full Slerp statement (xlsx). Only <strong>{franchisee?.location ?? 'this location'}</strong> sales are used; the spreadsheet has all locations. Use Stripe payout truth to convert 72% payout into invoice gross and 28% fee.
-              </p>
-              <label className="mb-3 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-neutral-300">
-                <input
-                  type="checkbox"
-                  checked={slerpUseStripePayoutTruth}
-                  onChange={(e) => setSlerpUseStripePayoutTruth(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
-                />
-                Use Stripe payout as source of truth (assumes payout is franchisee share, e.g. 72%)
-              </label>
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-700 px-4 py-2 text-sm font-medium text-slate-700 dark:text-neutral-200 hover:bg-slate-100 dark:hover:bg-neutral-600">
-                  <Upload className="h-4 w-4" />
-                  {slerpParsing ? 'Parsing…' : slerpFile ? slerpFile.name : 'Choose xlsx file'}
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    className="hidden"
-                    onChange={handleSlerpFileChange}
-                    disabled={slerpParsing}
-                  />
-                </label>
-                {slerpPreview.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleSaveSlerpReports}
-                    disabled={slerpSaving}
-                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
-                  >
-                    {slerpSaving ? 'Saving…' : `Save ${slerpPreview.length} pay week(s)`}
-                  </button>
-                )}
-              </div>
-              {slerpError && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{slerpError}</p>}
-              {slerpSuccess && <p className="mt-2 text-sm text-green-600 dark:text-green-400">Slerp reports saved.</p>}
-              {slerpPreview.length > 0 && (
-                <div className="mt-3 overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-neutral-600 text-left">
-                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400">Sales period</th>
-                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400">Payout date</th>
-                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">
-                          {slerpUseStripePayoutTruth ? 'Stripe payout (franchisee share)' : 'Net payable'}
-                        </th>
-                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">Invoice gross revenue</th>
-                        <th className="py-2 pr-4 font-medium text-slate-600 dark:text-neutral-400 text-right">Fee ({franchisee.slerp_percentage}%)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {computedSlerpPreview.map((p, i) => (
-                        <tr key={i} className="border-b border-slate-100 dark:border-neutral-700">
-                          <td className="py-2 pr-4 text-slate-700 dark:text-neutral-300">{formatDate(p.weekStart)} – {formatDate(p.weekEnd)}</td>
-                          <td className="py-2 pr-4 text-slate-700 dark:text-neutral-300">{formatDate(p.payoutDate)}</td>
-                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.payoutAmount)}</td>
-                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.invoiceGrossRevenue)}</td>
-                          <td className="py-2 pr-4 text-right font-medium">{formatCurrency(p.invoiceFeeAmount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          {(rowsWithData.length > 0 || slerpReviewGross > 0) && isPercentageBased && (
-            <div className="mb-8 rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 p-6 shadow-sm">
-              <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-neutral-100">Review & confirm</h2>
-              <div className="space-y-3">
-                {rowsWithData.flatMap((row) => {
-                  const bd = getDeliverooBreakdown(row);
-                  if (bd && row.platform === 'deliveroo') {
-                    return Object.entries(bd).map(([brand, amount]) => (
-                      <div key={`${row.rowId}-${brand}`} className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
-                        <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
-                          {brand} · {PLATFORM_LABELS[row.platform]}
-                        </span>
-                        <span className="text-sm font-medium text-slate-900 dark:text-neutral-100">
-                          {formatCurrency(amount)}
-                        </span>
-                      </div>
-                    ));
-                  }
-                  return (
-                    <div key={row.rowId} className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
-                      <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
-                        {row.brand || '—'} · {PLATFORM_LABELS[row.platform]}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <span className="text-sm text-slate-500 dark:text-neutral-300">£</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.editableRevenue}
-                          onChange={(e) =>
-                            setUploadRows((prev) =>
-                              prev.map((r) =>
-                                r.rowId === row.rowId ? { ...r, editableRevenue: e.target.value } : r
-                              )
-                            )
-                          }
-                          className="w-36 rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-600 dark:text-neutral-100 px-3 py-1.5 text-sm font-medium focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-                {slerpReviewGross > 0 && (
-                  <div className="flex items-center gap-4 rounded-lg bg-slate-50 dark:bg-neutral-700 p-3">
-                    <span className="w-40 shrink-0 text-sm font-medium text-slate-700 dark:text-neutral-200">
-                      {slerpBrand} · {PLATFORM_LABELS.slerp}
-                    </span>
-                    <span className="text-sm font-medium text-slate-900 dark:text-neutral-100">
-                      {formatCurrency(slerpReviewGross)}
-                    </span>
-                  </div>
-                )}
-                {/* Per-platform fee breakdown */}
-                {franchisee.payment_model === 'percentage_per_platform' && (rowsWithData.length > 0 || slerpReviewGross > 0) && (
-                  <div className="rounded-lg border border-slate-200 dark:border-neutral-600 bg-slate-50/50 dark:bg-neutral-700/50 p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-neutral-400">Fee breakdown by platform</p>
-                    <ul className="space-y-1.5">
-                      {rowsWithData.map((row) => {
-                        const bd = getDeliverooBreakdown(row);
-                        const rev = bd
-                          ? Object.values(bd).reduce((a, b) => a + b, 0)
-                          : parseFloat(row.editableRevenue || '0') || 0;
-                        const pct = getPlatformFeeRate(franchisee, row.platform);
-                        const platformFee = Math.round(rev * (pct / 100) * 100) / 100;
-                        return (
-                          <li key={row.rowId} className="flex items-center justify-between text-sm">
-                            <span className="text-slate-600 dark:text-neutral-300">
-                              {PLATFORM_LABELS[row.platform]} ({pct}%)
-                            </span>
-                            <span className="font-medium text-slate-900 dark:text-neutral-100">{formatCurrency(platformFee)}</span>
-                          </li>
-                        );
-                      })}
-                      {slerpReviewGross > 0 && (
-                        <li className="flex items-center justify-between text-sm">
-                          <span className="text-slate-600 dark:text-neutral-300">
-                            {PLATFORM_LABELS.slerp} ({getPlatformFeeRate(franchisee, 'slerp')}%)
-                          </span>
-                          <span className="font-medium text-slate-900 dark:text-neutral-100">{formatCurrency(slerpReviewFee)}</span>
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-                )}
-                <div className="border-t border-slate-200 dark:border-neutral-600 pt-3">
-                  <div className="flex items-center justify-between rounded-lg bg-slate-100 dark:bg-neutral-700 p-3">
-                    <span className="text-sm font-semibold text-slate-700 dark:text-neutral-200">Total gross revenue</span>
-                    <span className="text-lg font-bold text-slate-900 dark:text-neutral-100">{formatCurrency(reviewTotalGross)}</span>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between rounded-lg bg-primary/10 dark:bg-primary/20 p-3">
-                    <span className="text-sm font-semibold text-primary-dark dark:text-primary-light">
-                      Fee{franchisee.payment_model === 'percentage_per_platform' ? ' (per platform)' : ` (${feeRate}%)`}
-                    </span>
-                    <span className="text-lg font-bold text-primary-dark dark:text-primary-light">{formatCurrency(reviewFeeAmount)}</span>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-6 flex justify-end">
-                <button
-                  onClick={handleSaveUpload}
-                  disabled={saving}
-                  className="rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-primary-dark disabled:opacity-50"
-                >
-                  {saving ? 'Saving...' : 'Save reports & create invoice'}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeTab === 'invoices' && (
         <div>
-          {emailDrafts.length > 0 && (
-            <div className="mb-4 space-y-2">
-              {emailDrafts.map((draft) => (
-                <div key={draft.id} className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Mail className="h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Draft email pending review</p>
-                        <p className="text-xs text-amber-700 dark:text-amber-400 truncate">To: {draft.to_email} · {draft.subject}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <button
-                        onClick={() => setExpandedDraftId(expandedDraftId === draft.id ? null : draft.id)}
-                        className="text-xs text-amber-700 dark:text-amber-400 hover:underline"
-                      >
-                        {expandedDraftId === draft.id ? 'Hide' : 'Preview'}
-                      </button>
-                      <button
-                        onClick={() => discardDraft(draft.id)}
-                        disabled={discardingDraftId === draft.id}
-                        className="rounded px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-neutral-300 hover:bg-slate-100 dark:hover:bg-neutral-700 disabled:opacity-50"
-                      >
-                        {discardingDraftId === draft.id ? 'Discarding…' : 'Discard'}
-                      </button>
-                      <button
-                        onClick={() => approveDraft(draft.id)}
-                        disabled={approvingDraftId === draft.id}
-                        className="rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                      >
-                        {approvingDraftId === draft.id ? 'Sending…' : 'Approve & Send'}
-                      </button>
-                    </div>
-                  </div>
-                  {expandedDraftId === draft.id && (
-                    <pre className="mt-3 whitespace-pre-wrap rounded bg-white dark:bg-neutral-900 border border-amber-100 dark:border-amber-900 p-3 text-xs text-slate-700 dark:text-neutral-300 font-sans">
-                      {draft.body}
-                    </pre>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
           {monthlyInvoiceMessage && (
             <div className="mb-4 flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-800">
               <CheckCircle className="h-4 w-4 flex-shrink-0" />
@@ -2290,11 +1151,6 @@ export default function FranchiseeDetailPage() {
           <div className="mb-4 flex items-center justify-between">
             <div>
               <p className="text-sm text-slate-500 dark:text-neutral-400">Invoices for this franchisee</p>
-              {selectedCatchUpInvoiceIds.length > 0 && (
-                <p className="mt-1 text-xs text-slate-500 dark:text-neutral-400">
-                  {selectedCatchUpInvoiceIds.length} invoice{selectedCatchUpInvoiceIds.length === 1 ? '' : 's'} selected for a catch-up invoice.
-                </p>
-              )}
             </div>
             <div className="flex items-center gap-2">
               {franchisee.payment_model === 'monthly_fixed' && (
@@ -2336,11 +1192,12 @@ export default function FranchiseeDetailPage() {
               )}
               <button
                 type="button"
-                onClick={() => setShowCatchUpPreview(true)}
-                disabled={selectedCatchUpInvoiceIds.length === 0}
-                className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+                onClick={regenerateAllInvoicePdfs}
+                disabled={regeneratingAllPdfs || invoices.length === 0}
+                className="rounded-lg border border-slate-300 dark:border-neutral-600 px-3 py-2 text-sm font-medium text-slate-700 dark:text-neutral-200 hover:bg-slate-100 dark:hover:bg-neutral-700 disabled:opacity-50"
+                title="Rebuild and store PDFs for all invoices in this franchisee"
               >
-                Review catch-up invoice
+                {regeneratingAllPdfs ? 'Regenerating PDFs…' : 'Regenerate all PDFs'}
               </button>
               <select
                 value={statusFilter}
@@ -2373,7 +1230,7 @@ export default function FranchiseeDetailPage() {
                 {invoices.length === 0
                   ? franchisee.payment_model === 'monthly_fixed'
                     ? 'Use "Generate monthly invoice" to create an invoice for the last full month.'
-                    : 'Upload weekly reports in the Upload reports tab to create an invoice.'
+                    : 'Upload weekly reports in the Weekly Hub to create an invoice.'
                   : 'Try a different status filter.'}
               </p>
             </div>
@@ -2381,23 +1238,10 @@ export default function FranchiseeDetailPage() {
             <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 shadow-sm">
               <div className="border-b border-slate-200 dark:border-neutral-600 px-5 py-3">
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-neutral-100">Weekly invoices</h3>
-                <p className="mt-1 text-xs text-slate-500 dark:text-neutral-400">
-                  Select from this table to create a combined catch-up invoice.
-                </p>
               </div>
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-slate-100 dark:border-neutral-600 bg-slate-50 dark:bg-neutral-700">
-                    <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
-                      <input
-                        type="checkbox"
-                        checked={allEligibleCatchUpSelected}
-                        onChange={toggleSelectAllCatchUpInvoices}
-                        disabled={catchUpEligibleInvoices.length === 0}
-                        aria-label="Select all eligible invoices for catch-up invoice"
-                        className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
-                      />
-                    </th>
                     <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
                       Invoice
                     </th>
@@ -2431,21 +1275,6 @@ export default function FranchiseeDetailPage() {
                         key={invoice.id}
                         className="border-b border-slate-50 dark:border-neutral-600 transition-colors hover:bg-slate-50/50 dark:hover:bg-neutral-700/50"
                       >
-                        <td className="px-4 py-3.5 text-center">
-                          {invoice.status !== 'paid' &&
-                          invoice.status !== 'processing' &&
-                          (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0) ? (
-                            <input
-                              type="checkbox"
-                              checked={selectedCatchUpInvoiceIds.includes(invoice.id)}
-                              onChange={() => toggleCatchUpInvoiceSelection(invoice.id)}
-                              aria-label={`Select ${invoice.invoice_number} for catch-up invoice`}
-                              className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary"
-                            />
-                          ) : (
-                            <span className="text-xs text-slate-300 dark:text-neutral-600">—</span>
-                          )}
-                        </td>
                         <td className="px-5 py-3.5">
                           <span className="text-sm font-semibold text-slate-900 dark:text-neutral-100">{invoice.invoice_number}</span>
                         </td>
@@ -2662,7 +1491,7 @@ export default function FranchiseeDetailPage() {
                       </tr>
                       {expandedId === invoice.id && (
                         <tr key={`${invoice.id}-detail`}>
-                          <td colSpan={9} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
+                          <td colSpan={8} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
                             <div className="rounded-lg bg-white dark:bg-neutral-800 p-4 shadow-sm">
                               {invoice.status === 'processing' && (
                                 <p className="mb-3 rounded-md bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
@@ -2774,7 +1603,7 @@ export default function FranchiseeDetailPage() {
                                         )}
                                         {mismatch && (
                                           <p className="mb-3 rounded-md bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-                                            Breakdown total ({formatCurrency(breakdownTotal)}) doesn’t match invoice total. Upload any missing platform reports for week {formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Upload reports tab (same week, correct brand).
+                                            Breakdown total ({formatCurrency(breakdownTotal)}) doesn’t match invoice total. Upload any missing platform reports for week {formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Weekly Hub (same week, correct brand).
                                           </p>
                                         )}
                                         {rows.length > 0 ? rows.map((item, idx) => (
@@ -2793,7 +1622,7 @@ export default function FranchiseeDetailPage() {
                                           <p className="text-sm text-slate-500 dark:text-neutral-400">
                                             {isMonthlyFixedSite
                                               ? 'Monthly fixed invoice (no uploaded platform reports required).'
-                                              : `No reports found for this invoice’s week. Upload platform reports for week ${formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Upload reports tab.`}
+                                              : `No reports found for this invoice’s week. Upload platform reports for week ${formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the Weekly Hub.`}
                                           </p>
                                         )}
                                         <div className="mt-2 flex items-center justify-between border-t border-slate-200 dark:border-neutral-600 px-4 pt-3">
@@ -2812,7 +1641,7 @@ export default function FranchiseeDetailPage() {
                                         </div>
                                         {rows.length > 0 && (
                                           <p className="mt-3 text-xs text-slate-500 dark:text-neutral-400">
-                                            Missing a platform (e.g. Uber Eats)? Upload its report for week {formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the <button type="button" onClick={() => setActiveTab('upload')} className="underline hover:text-slate-700 dark:hover:text-neutral-200">Upload reports</button> tab — same week and brand. The invoice will update automatically.
+                                            Missing a platform (e.g. Uber Eats)? Upload its report for week {formatWeekRange(invoice.week_start_date, invoice.week_end_date)} in the <Link href="/weekly" className="underline hover:text-slate-700 dark:hover:text-neutral-200">Weekly Hub</Link> — same week and brand. The invoice will update automatically.
                                           </p>
                                         )}
                                         {(() => {
@@ -3090,93 +1919,6 @@ export default function FranchiseeDetailPage() {
             </div>
           )}
         </div>
-      )}
-
-      {showCatchUpPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="w-full max-w-2xl rounded-xl bg-white dark:bg-neutral-800 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-neutral-700 px-6 py-4">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-neutral-100">Review catch-up invoice</h3>
-                <p className="mt-1 text-sm text-slate-500 dark:text-neutral-400">
-                  Review the selected weeks before creating the draft invoice.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCatchUpPreview(false)}
-                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
-                aria-label="Close catch-up invoice preview"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
-              {catchUpPreviewItems.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-neutral-400">Select one or more unpaid invoices first.</p>
-              ) : (
-                <div className="space-y-3">
-                  {catchUpPreviewItems.map((item, idx) => (
-                    <div
-                      key={`${item.source_invoice_id ?? item.label}-${idx}`}
-                      className="flex items-center justify-between rounded-lg bg-slate-50 dark:bg-neutral-700 px-4 py-3"
-                    >
-                      <div>
-                        <p className="text-sm font-medium text-slate-900 dark:text-neutral-100">{item.label}</p>
-                        {item.source_invoice_number && (
-                          <p className="text-xs text-slate-500 dark:text-neutral-400">{item.source_invoice_number}</p>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-slate-900 dark:text-neutral-100">
-                          {formatCurrency(item.fee_amount)}
-                        </p>
-                        <p className="text-xs text-slate-500 dark:text-neutral-400">
-                          Gross {formatCurrency(item.gross_revenue)}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="rounded-lg border border-slate-200 dark:border-neutral-700 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-slate-700 dark:text-neutral-300">Total gross revenue</span>
-                      <span className="text-sm font-semibold text-slate-900 dark:text-neutral-100">
-                        {formatCurrency(catchUpSelectedTotalGross)}
-                      </span>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between">
-                      <span className="text-sm font-medium text-primary-dark dark:text-primary-light">Total amount due</span>
-                      <span className="text-base font-bold text-primary-dark dark:text-primary-light">
-                        {formatCurrency(catchUpSelectedTotalFee)}
-                      </span>
-                    </div>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-neutral-400">
-                    After creating the draft, the PDF preview will open so you can review it before sending.
-                  </p>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center justify-end gap-3 border-t border-slate-200 dark:border-neutral-700 px-6 py-4">
-              <button
-                type="button"
-                onClick={() => setShowCatchUpPreview(false)}
-                className="rounded-lg border border-slate-300 dark:border-neutral-600 px-4 py-2 text-sm font-medium text-slate-700 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={createCatchUpInvoice}
-                disabled={catchUpPreviewItems.length === 0 || creatingCatchUpInvoice}
-                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
-              >
-                {creatingCatchUpInvoice ? 'Creating…' : 'Create draft invoice'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {editingInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !editInvoiceSaving && setEditingInvoice(null)}>

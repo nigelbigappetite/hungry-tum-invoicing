@@ -7,6 +7,7 @@ import {
   Users,
   BarChart2,
   LogOut,
+  CalendarDays,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
@@ -16,6 +17,7 @@ import { LOGOS } from '@/lib/logos';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/weekly', label: 'Weekly Hub', icon: CalendarDays },
   { href: '/franchisees', label: 'Franchisees', icon: Users },
   { href: '/analytics', label: 'Finance Analytics', icon: BarChart2 },
 ];
@@ -31,17 +33,17 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col bg-sidebar-bg text-sidebar-text">
+    <aside className="fixed left-0 top-0 z-40 flex h-screen w-64 flex-col bg-white dark:bg-neutral-900 border-r border-gray-200 dark:border-neutral-800">
       {/* Logo / Brand */}
-      <div className="flex h-16 items-center gap-3 border-b border-white/10 dark:border-neutral-800 px-6">
+      <div className="flex h-16 items-center gap-3 border-b border-gray-200 dark:border-neutral-800 px-6">
         <img
           src={LOGOS.app}
           alt="Hungry Tum"
           className="h-9 w-9 object-contain object-center"
         />
         <div>
-          <h1 className="text-base font-bold text-white dark:text-neutral-100">Hungry Tum</h1>
-          <p className="text-xs text-slate-400 dark:text-neutral-500">Invoicing</p>
+          <h1 className="text-base font-bold text-gray-900 dark:text-neutral-100">Hungry Tum</h1>
+          <p className="text-xs text-gray-500 dark:text-neutral-500">Invoicing</p>
         </div>
       </div>
 
@@ -59,7 +61,7 @@ export default function Sidebar() {
                 'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
                 isActive
                   ? 'bg-primary text-white'
-                  : 'text-slate-300 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100 hover:bg-white/10 hover:text-white'
+                  : 'text-gray-600 dark:text-neutral-400 hover:bg-gray-100 dark:hover:bg-neutral-800 hover:text-gray-900 dark:hover:text-neutral-100'
               )}
             >
               <item.icon className="h-5 w-5" />
@@ -70,11 +72,11 @@ export default function Sidebar() {
       </nav>
 
       {/* Theme + Sign out */}
-      <div className="border-t border-white/10 dark:border-neutral-800 p-3 space-y-1">
+      <div className="border-t border-gray-200 dark:border-neutral-800 p-3 space-y-1">
         <ThemeToggle />
         <button
           onClick={handleSignOut}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 dark:text-neutral-400 transition-colors dark:hover:bg-neutral-800 dark:hover:text-neutral-100 hover:bg-white/10 hover:text-white"
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 dark:text-neutral-400 transition-colors hover:bg-gray-100 dark:hover:bg-neutral-800 hover:text-gray-900 dark:hover:text-neutral-100"
         >
           <LogOut className="h-5 w-5" />
           Sign Out
