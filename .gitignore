@@ -43,6 +43,7 @@ yarn-error.log*
 # local/generated working files
 /tmp/
 /scripts/
+/supabase/.temp/
 
 # vercel
 .vercel
