@@ -40,6 +40,10 @@ yarn-error.log*
 # npm cache (do not commit)
 .npm-cache
 
+# local/generated working files
+/tmp/
+/scripts/
+
 # vercel
 .vercel
 
