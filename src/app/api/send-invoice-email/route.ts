@@ -5,7 +5,6 @@ import { renderToBuffer } from '@react-pdf/renderer';
 import { Resend } from 'resend';
 import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
-import { formatRecommendedBacsDateFromInvoiceDate } from '@/lib/utils';
 import { createElement } from 'react';
 
 export async function POST(request: NextRequest) {
@@ -82,10 +81,6 @@ export async function POST(request: NextRequest) {
       accountNumber: process.env.INVOICE_ACCOUNT_NUMBER || undefined,
     };
 
-    const bacsCollectionDate = franchisee.bacs_payment_method_id && invoice.created_at
-      ? formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)
-      : undefined;
-
     const publicDir = path.resolve(process.cwd(), 'public');
     const logoPathCandidate =
       process.env.INVOICE_LOGO_PATH ||
@@ -102,7 +97,6 @@ export async function POST(request: NextRequest) {
       franchisee,
       reports: combinedReports,
       paymentDetails,
-      bacsCollectionDate,
       logoPath,
       businessAddressLines,
     });
@@ -126,7 +120,7 @@ export async function POST(request: NextRequest) {
     }
 
     const resendKey = process.env.RESEND_API_KEY;
-    const fromEmail = process.env.INVOICE_EMAIL_FROM || process.env.BACS_EMAIL_FROM || 'Hungry Tum <onboarding@resend.dev>';
+    const fromEmail = process.env.INVOICE_EMAIL_FROM || 'Hungry Tum <onboarding@resend.dev>';
     if (!resendKey) {
       return NextResponse.json(
         { error: 'Email not configured. Add RESEND_API_KEY to .env.local.' },

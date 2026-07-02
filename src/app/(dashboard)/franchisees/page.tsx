@@ -41,13 +41,6 @@ function FranchiseesPageContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchFranchisees]);
 
-  useEffect(() => {
-    if (searchParams.get('bacs_setup') === '1') {
-      fetchFranchisees();
-      window.history.replaceState({}, '', '/franchisees');
-    }
-  }, [searchParams, fetchFranchisees]);
-
   const editId = searchParams.get('edit');
   useEffect(() => {
     if (editId && franchisees.length > 0) {

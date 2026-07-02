@@ -5,12 +5,13 @@ import { getWeekRangeFromDate } from '@/lib/utils';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { invoiceId, total_gross_revenue, fee_amount, fee_percentage, week_start_date } = body as {
+    const { invoiceId, total_gross_revenue, fee_amount, fee_percentage, week_start_date, invoice_date } = body as {
       invoiceId?: string;
       total_gross_revenue?: number;
       fee_amount?: number;
       fee_percentage?: number;
       week_start_date?: string;
+      invoice_date?: string;
     };
 
     if (!invoiceId || typeof invoiceId !== 'string') {
@@ -41,6 +42,7 @@ export async function POST(request: NextRequest) {
       total_gross_revenue?: number;
       fee_amount?: number;
       fee_percentage?: number;
+      invoice_date?: string;
       week_start_date?: string;
       week_end_date?: string;
     } = {};
@@ -64,6 +66,16 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+    }
+    if (typeof invoice_date === 'string' && invoice_date.trim()) {
+      const trimmed = invoice_date.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed) || isNaN(new Date(`${trimmed}T00:00:00`).getTime())) {
+        return NextResponse.json(
+          { error: 'Invalid invoice date. Use yyyy-MM-dd.' },
+          { status: 400 }
+        );
+      }
+      updates.invoice_date = trimmed;
     }
 
     if (Object.keys(updates).length === 0) {

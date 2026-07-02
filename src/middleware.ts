@@ -33,8 +33,6 @@ export async function middleware(request: NextRequest) {
     !user &&
     !request.nextUrl.pathname.startsWith('/login') &&
     !request.nextUrl.pathname.startsWith('/auth') &&
-    !request.nextUrl.pathname.startsWith('/bacs-setup-complete') &&
-    request.nextUrl.pathname !== '/api/confirm-bacs-setup' &&
     request.nextUrl.pathname !== '/api/webhooks/stripe' &&
     !request.nextUrl.pathname.startsWith('/reset-password')
   ) {

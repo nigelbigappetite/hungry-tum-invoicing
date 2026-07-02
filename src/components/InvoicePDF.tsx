@@ -309,8 +309,6 @@ interface InvoicePDFProps {
   /** Kept for compatibility with the invoice generation route; Slerp now renders in the main table. */
   slerpPayoutDate?: string;
   paymentDetails?: InvoicePaymentDetails;
-  /** When set, payment will be taken by BACS on this date; bank details are omitted. */
-  bacsCollectionDate?: string;
   /** For pay_them franchisees: amount we will pay (Deliveroo gross − our fees). Omit for collect_fees. */
   amountWePay?: number;
   /** Absolute path to logo image for PDF (e.g. from generate-invoice API). Omit to show "HT" text. */
@@ -329,8 +327,8 @@ function getInvoiceBrandFallback(invoice: Invoice): string | null {
   return brands.length === 1 ? brands[0] : null;
 }
 
-export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
-  const payThem = franchisee.payment_direction === 'pay_them' && amountWePay != null;
+export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, logoPath, businessAddressLines }: InvoicePDFProps) {
+  const payThem = franchisee.payment_direction === 'pay_them';
   const showLogo = Boolean(logoPath?.trim());
   const platformReports = [...(reports || []), ...(slerpReports || [])].filter((r) =>
     r && INVOICE_PLATFORMS.includes(r.platform as typeof INVOICE_PLATFORMS[number])
@@ -471,7 +469,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           <View style={styles.infoBlock}>
             <Text style={styles.infoLabel}>Invoice Date</Text>
             <Text style={styles.infoText}>
-              {formatDateStr(invoice.created_at)}
+              {formatDateStr(invoice.invoice_date)}
             </Text>
             <Text style={{ ...styles.infoLabel, marginTop: 10 }}>
               Period Covered
@@ -693,7 +691,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
           )}
         </View>
 
-        {/* Payment / Direct debit */}
+        {/* Payment */}
         <View style={styles.footer}>
           {payThem ? (
             <>
@@ -701,6 +699,22 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
               <Text style={styles.footerText}>
                 Remaining funds will be transferred to {franchisee.name}.
               </Text>
+              {(franchisee.bank_account_name || franchisee.bank_name || franchisee.sort_code || franchisee.account_number) && (
+                <>
+                  {franchisee.bank_account_name && (
+                    <Text style={styles.footerText}>Account name: {franchisee.bank_account_name}</Text>
+                  )}
+                  {franchisee.bank_name && (
+                    <Text style={styles.footerText}>Bank: {franchisee.bank_name}</Text>
+                  )}
+                  {franchisee.sort_code && (
+                    <Text style={styles.footerText}>Sort code: {franchisee.sort_code}</Text>
+                  )}
+                  {franchisee.account_number && (
+                    <Text style={styles.footerText}>Account number: {franchisee.account_number}</Text>
+                  )}
+                </>
+              )}
               <Text style={styles.footerText}>
                 Reference: {invoice.invoice_number}
               </Text>
@@ -720,7 +734,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 </Text>
               )}
               <Text style={styles.footerText}>
-                No direct debit will be collected for this invoice.
+                No payment collection will be made for this invoice.
               </Text>
               <Text style={styles.footerText}>
                 Reference: {invoice.invoice_number}
@@ -753,7 +767,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 </>
               ) : (
                 <Text style={styles.footerText}>
-                  Funds will be transferred to {franchisee.name} by bank transfer.
+                  Payment is handled through the agreed payment method.
                 </Text>
               )}
               {!isCatchUpInvoice && (

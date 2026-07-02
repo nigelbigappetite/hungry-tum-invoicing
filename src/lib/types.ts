@@ -37,8 +37,11 @@ export interface Franchisee {
   justeat_percentage: number | null;
   slerp_percentage: number | null;
   payment_direction: 'collect_fees' | 'pay_them';
+  bank_account_name: string | null;
+  bank_name: string | null;
+  sort_code: string | null;
+  account_number: string | null;
   stripe_customer_id: string | null;
-  bacs_payment_method_id: string | null;
   created_at: string;
 }
 
@@ -88,11 +91,11 @@ export interface Invoice {
   total_gross_revenue: number;
   fee_percentage: number;
   fee_amount: number;
+  invoice_date: string;
   status: InvoiceStatus;
   pdf_path: string | null;
   payment_intent_id: string | null;
   payment_failure_reason: string | null;
-  collect_from_date: string | null;
   created_at: string;
   franchisee?: Franchisee;
   weekly_reports?: WeeklyReport[];

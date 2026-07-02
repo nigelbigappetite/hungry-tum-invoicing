@@ -20,8 +20,6 @@ import {
   formatCurrency,
   formatDate,
   formatWeekRange,
-  formatRecommendedBacsDateFromInvoiceDate,
-  getUpcomingFridays,
   getPlatformFeeRate,
   cn,
 } from '@/lib/utils';
@@ -40,7 +38,6 @@ import {
   Download,
   ChevronDown,
   ChevronUp,
-  Building2,
   Send,
   Pencil,
   MapPin,
@@ -57,7 +54,6 @@ interface InvoiceWithFranchisee extends Invoice {
     name: string;
     location: string;
     email: string;
-    bacs_payment_method_id: string | null;
   } | null;
 }
 
@@ -74,8 +70,6 @@ export default function FranchiseeDetailPage() {
 
   const [franchisee, setFranchisee] = useState<Franchisee | null>(null);
   const [loadingFranchisee, setLoadingFranchisee] = useState(true);
-  const [settingUpBacs, setSettingUpBacs] = useState(false);
-  const [clearingBacs, setClearingBacs] = useState(false);
 
   const [monthlyInvoiceSaving, setMonthlyInvoiceSaving] = useState(false);
   const [monthlyInvoiceMessage, setMonthlyInvoiceMessage] = useState('');
@@ -97,16 +91,13 @@ export default function FranchiseeDetailPage() {
   const [reports, setReports] = useState<Record<string, WeeklyReport[]>>({});
   const [generatingPdf, setGeneratingPdf] = useState<string | null>(null);
   const [previewingPdfId, setPreviewingPdfId] = useState<string | null>(null);
-  const [chargingBacsId, setChargingBacsId] = useState<string | null>(null);
   const [recordingPaymentId, setRecordingPaymentId] = useState<string | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
   const [deletingInvoiceId, setDeletingInvoiceId] = useState<string | null>(null);
-  const [collectDatePickerId, setCollectDatePickerId] = useState<string | null>(null);
-  const [savingCollectDateId, setSavingCollectDateId] = useState<string | null>(null);
   const [regeneratingAllPdfs, setRegeneratingAllPdfs] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<InvoiceWithFranchisee | null>(null);
   const [editInvoiceSaving, setEditInvoiceSaving] = useState(false);
-  const [editInvoiceForm, setEditInvoiceForm] = useState({ total_gross_revenue: '', fee_amount: '', fee_percentage: '', week_start_date: '' });
+  const [editInvoiceForm, setEditInvoiceForm] = useState({ total_gross_revenue: '', fee_amount: '', fee_percentage: '', week_start_date: '', invoice_date: '' });
 
   // Manual add missing platform (when CSV download from platform is blank)
   const [manualAddPlatform, setManualAddPlatform] = useState<AggregatorPlatform>('ubereats');
@@ -141,7 +132,7 @@ export default function FranchiseeDetailPage() {
     const [{ data, error }, { data: revenueRows, error: revenueError }] = await Promise.all([
       supabase
         .from('invoices')
-        .select('*, franchisees(name, location, email, bacs_payment_method_id)')
+        .select('*, franchisees(name, location, email)')
         .eq('franchisee_id', id)
         .order('week_start_date', { ascending: false })
         .order('created_at', { ascending: false }),
@@ -258,58 +249,6 @@ export default function FranchiseeDetailPage() {
   useEffect(() => {
     fetchPlatformRevenue();
   }, [fetchPlatformRevenue]);
-
-  const setupBacs = async (isReminder = false) => {
-    if (!id) return;
-    setSettingUpBacs(true);
-    try {
-      const res = await fetch('/api/setup-bacs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ franchiseeId: id, reminder: isReminder }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.success && data.message) {
-        alert(data.message);
-        fetchFranchisee();
-        return;
-      }
-      if (data.url) {
-        window.location.href = data.url;
-        return;
-      }
-      alert(data.error || 'Failed to start BACS setup');
-    } catch {
-      alert('Failed to start BACS setup');
-    } finally {
-      setSettingUpBacs(false);
-    }
-  };
-
-  const clearBacs = async () => {
-    if (!id || !confirm('Clear stored BACS details? The franchisee will need to complete "Set up BACS" again (e.g. for live mode).')) return;
-    setClearingBacs(true);
-    try {
-      const res = await fetch('/api/clear-bacs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ franchiseeId: id }),
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        alert(data.message ?? 'BACS cleared.');
-        fetchFranchisee();
-      } else {
-        alert(data.error || 'Failed to clear BACS');
-      }
-    } catch {
-      alert('Failed to clear BACS');
-    } finally {
-      setClearingBacs(false);
-    }
-  };
 
   // Metrics (from all invoices + platform revenue)
   const totalGrossRevenue = invoices.reduce((s, i) => s + Number(i.total_gross_revenue || 0), 0);
@@ -709,45 +648,6 @@ export default function FranchiseeDetailPage() {
     }
   };
 
-  const chargeBacs = async (invoiceId: string) => {
-    setChargingBacsId(invoiceId);
-    try {
-      const response = await fetch('/api/charge-invoice-bacs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceId }),
-        credentials: 'include',
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        alert(data.error || 'Failed to collect via BACS');
-        return;
-      }
-      alert(data.message ?? 'BACS collection started.');
-      fetchInvoices();
-    } catch {
-      alert('Failed to collect via BACS');
-    } finally {
-      setChargingBacsId(null);
-    }
-  };
-
-  const setCollectDate = async (invoiceId: string, date: string) => {
-    setSavingCollectDateId(invoiceId);
-    setCollectDatePickerId(null);
-    try {
-      await fetch('/api/set-collect-date', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoiceId, collect_from_date: date }),
-        credentials: 'include',
-      });
-      setInvoices(prev => prev.map(inv => inv.id === invoiceId ? { ...inv, collect_from_date: date } : inv));
-    } finally {
-      setSavingCollectDateId(null);
-    }
-  };
-
   const recordPayment = async (invoiceId: string) => {
     setRecordingPaymentId(invoiceId);
     try {
@@ -779,6 +679,7 @@ export default function FranchiseeDetailPage() {
       fee_amount: String(invoice.fee_amount ?? ''),
       fee_percentage: String(invoice.fee_percentage ?? ''),
       week_start_date: invoice.week_start_date ?? '',
+      invoice_date: invoice.invoice_date ?? new Date().toISOString().slice(0, 10),
     });
   };
 
@@ -795,6 +696,10 @@ export default function FranchiseeDetailPage() {
       alert('Please select the week beginning (Monday).');
       return;
     }
+    if (!editInvoiceForm.invoice_date.trim()) {
+      alert('Please select the invoice date.');
+      return;
+    }
     setEditInvoiceSaving(true);
     try {
       const res = await fetch('/api/update-invoice', {
@@ -806,6 +711,7 @@ export default function FranchiseeDetailPage() {
           fee_amount: fee,
           ...(isNaN(pct) || pct < 0 ? {} : { fee_percentage: pct }),
           week_start_date: editInvoiceForm.week_start_date.trim(),
+          invoice_date: editInvoiceForm.invoice_date.trim(),
         }),
         credentials: 'include',
       });
@@ -994,60 +900,9 @@ export default function FranchiseeDetailPage() {
                 We pay them
               </span>
             )}
-            {franchisee.bacs_payment_method_id && (
-              <span className="ml-3 flex items-center gap-1 text-xs font-medium text-green-700 dark:text-green-400">
-                <CheckCircle className="h-3.5 w-3.5" />
-                BACS set up
-              </span>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {!franchisee.bacs_payment_method_id && (
-            <>
-              <button
-                type="button"
-                onClick={() => setupBacs()}
-                disabled={settingUpBacs}
-                className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-              >
-                {settingUpBacs ? (
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 dark:border-neutral-500 border-t-slate-600 dark:border-t-neutral-400" />
-                ) : (
-                  <Building2 className="h-4 w-4" />
-                )}
-                Set up BACS
-              </button>
-              <button
-                type="button"
-                onClick={() => setupBacs(true)}
-                disabled={settingUpBacs}
-                title="Send a reminder that BACS setup is outstanding (missed payment)"
-                className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700 disabled:opacity-50"
-              >
-                {settingUpBacs ? (
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 dark:border-neutral-500 border-t-slate-600 dark:border-t-neutral-400" />
-                ) : (
-                  <Mail className="h-4 w-4" />
-                )}
-                Resend reminder
-              </button>
-            </>
-          )}
-          {franchisee.bacs_payment_method_id && (
-            <button
-              type="button"
-              onClick={clearBacs}
-              disabled={clearingBacs}
-              className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-              title="Clear stored BACS so you can set up again (e.g. after switching to live Stripe)"
-            >
-              {clearingBacs ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-amber-300 border-t-amber-600" />
-              ) : null}
-              Re-set up BACS
-            </button>
-          )}
           <Link
             href={`/franchisees?edit=${franchisee.id}`}
             className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 px-3 py-2 text-sm font-medium text-slate-600 dark:text-neutral-200 hover:bg-slate-50 dark:hover:bg-neutral-700"
@@ -1260,9 +1115,6 @@ export default function FranchiseeDetailPage() {
                     <th className="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
                       Status
                     </th>
-                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400" title="Recommended BACS collection date (Friday after the invoice week) — when we collect payment from the franchisee">
-                      <span className="cursor-help border-b border-dotted border-slate-400 dark:border-neutral-500">Collect from</span>
-                    </th>
                     <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-neutral-400">
                       Actions
                     </th>
@@ -1343,49 +1195,6 @@ export default function FranchiseeDetailPage() {
                             <option value="failed">Failed</option>
                           </select>
                         </td>
-                        <td className="px-5 py-3.5 text-slate-500 dark:text-neutral-400">
-                          {invoice.status === 'processing' ? (
-                            <span className="text-xs text-amber-700 dark:text-amber-400">Processing…</span>
-                          ) : invoice.status === 'failed' ? (
-                            <span className="text-xs text-red-600 dark:text-red-400" title={invoice.payment_failure_reason ?? undefined}>
-                              {invoice.payment_failure_reason
-                                ? invoice.payment_failure_reason.replace(/_/g, ' ')
-                                : 'Payment failed'}
-                            </span>
-                          ) : franchisee.payment_direction === 'pay_them' ? (
-                            <span className="text-xs text-slate-500 dark:text-neutral-400">Pay them</span>
-                          ) : invoice.status !== 'paid' && franchisee.bacs_payment_method_id ? (
-                            <div className="relative">
-                              <button
-                                onClick={() => setCollectDatePickerId(collectDatePickerId === invoice.id ? null : invoice.id)}
-                                disabled={savingCollectDateId === invoice.id}
-                                className="text-xs dark:text-neutral-300 underline decoration-dotted underline-offset-2 hover:text-slate-800 dark:hover:text-white disabled:opacity-50"
-                                title="Click to change collection date"
-                              >
-                                {savingCollectDateId === invoice.id
-                                  ? 'Saving…'
-                                  : invoice.collect_from_date
-                                    ? format(parseISO(invoice.collect_from_date), 'EEE d MMM yyyy')
-                                    : formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)}
-                              </button>
-                              {collectDatePickerId === invoice.id && (
-                                <div className="absolute left-0 top-6 z-20 min-w-[180px] rounded-lg border border-slate-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 shadow-lg py-1">
-                                  {getUpcomingFridays(5).map(opt => (
-                                    <button
-                                      key={opt.value}
-                                      onClick={() => setCollectDate(invoice.id, opt.value)}
-                                      className="block w-full px-4 py-2 text-left text-xs hover:bg-slate-50 dark:hover:bg-neutral-700 text-slate-700 dark:text-neutral-200"
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-xs">—</span>
-                          )}
-                        </td>
                         <td className="px-5 py-3.5 text-right">
                           <div className="flex items-center justify-end gap-1">
                             {invoice.status === 'draft' && (
@@ -1419,20 +1228,6 @@ export default function FranchiseeDetailPage() {
                                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
                                 ) : (
                                   <Banknote className="h-4 w-4" />
-                                )}
-                              </button>
-                            )}
-                            {invoice.status !== 'paid' && invoice.status !== 'processing' && franchisee.payment_direction !== 'pay_them' && franchisee.bacs_payment_method_id && (
-                              <button
-                                onClick={() => chargeBacs(invoice.id)}
-                                disabled={chargingBacsId === invoice.id}
-                                className="rounded-lg p-1.5 text-blue-600 dark:text-neutral-200 dark:hover:bg-neutral-600 dark:hover:text-white hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50"
-                                title={invoice.status === 'failed' ? 'Retry BACS collection' : 'Collect via BACS'}
-                              >
-                                {chargingBacsId === invoice.id ? (
-                                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 dark:border-neutral-300 border-t-transparent" />
-                                ) : (
-                                  <Building2 className="h-4 w-4" />
                                 )}
                               </button>
                             )}
@@ -1491,26 +1286,11 @@ export default function FranchiseeDetailPage() {
                       </tr>
                       {expandedId === invoice.id && (
                         <tr key={`${invoice.id}-detail`}>
-                          <td colSpan={8} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
+                          <td colSpan={7} className="bg-slate-50 dark:bg-neutral-700/50 px-5 py-4">
                             <div className="rounded-lg bg-white dark:bg-neutral-800 p-4 shadow-sm">
-                              {invoice.status === 'processing' && (
-                                <p className="mb-3 rounded-md bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-                                  BACS collection in progress. The invoice will be marked paid when the bank confirms (typically a few business days).
-                                </p>
-                              )}
                               {invoice.status !== 'paid' && invoice.status !== 'processing' && franchisee.payment_direction === 'pay_them' && (
                                 <p className="mb-3 rounded-md bg-emerald-50 dark:bg-emerald-900/20 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-200">
                                   We pay them. Use &quot;Pay due funds&quot; above when you have paid this invoice.
-                                </p>
-                              )}
-                              {invoice.status !== 'paid' &&
-                                invoice.status !== 'processing' &&
-                                franchisee.payment_direction !== 'pay_them' &&
-                                franchisee.bacs_payment_method_id &&
-                                invoice.created_at &&
-                                (!Array.isArray(invoice.line_items) || invoice.line_items.length === 0) && (
-                                <p className="mb-3 rounded-md bg-blue-50 dark:bg-neutral-700 dark:text-neutral-200 px-3 py-2 text-xs text-blue-800">
-                                  Funds will clear by BACS around 7–10 working days from receipt of the invoice.
                                 </p>
                               )}
                               {franchisee.email && (
@@ -1924,8 +1704,17 @@ export default function FranchiseeDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !editInvoiceSaving && setEditingInvoice(null)}>
           <div className="w-full max-w-md rounded-xl bg-white dark:bg-neutral-800 p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-slate-900 dark:text-neutral-100 mb-4">Edit invoice {editingInvoice.invoice_number}</h3>
-            <p className="text-sm text-slate-500 dark:text-neutral-400 mb-4">Only draft invoices can be edited. You can change the week, gross revenue and fee.</p>
+            <p className="text-sm text-slate-500 dark:text-neutral-400 mb-4">Only draft invoices can be edited. You can change the invoice date, period, gross revenue and fee.</p>
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-neutral-300 mb-1">Invoice date</label>
+                <input
+                  type="date"
+                  value={editInvoiceForm.invoice_date}
+                  onChange={(e) => setEditInvoiceForm((f) => ({ ...f, invoice_date: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm"
+                />
+              </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-neutral-300 mb-1">Week beginning (Monday)</label>
                 <input

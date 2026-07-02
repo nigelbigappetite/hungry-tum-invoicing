@@ -52,6 +52,10 @@ export default function FranchiseeForm({
   const [paymentDirection, setPaymentDirection] = useState<'collect_fees' | 'pay_them'>(
     franchisee?.payment_direction ?? 'collect_fees'
   );
+  const [bankAccountName, setBankAccountName] = useState(franchisee?.bank_account_name ?? '');
+  const [bankName, setBankName] = useState(franchisee?.bank_name ?? '');
+  const [sortCode, setSortCode] = useState(franchisee?.sort_code ?? '');
+  const [accountNumber, setAccountNumber] = useState(franchisee?.account_number ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [brandRecords, setBrandRecords] = useState<BrandRecord[]>([]);
@@ -91,6 +95,10 @@ export default function FranchiseeForm({
       justeat_percentage: null,
       slerp_percentage: brands.includes('Wing Shack') && slerpPct.trim() !== '' ? parseFloat(slerpPct) || null : null,
       payment_direction: paymentDirection,
+      bank_account_name: bankAccountName.trim() || null,
+      bank_name: bankName.trim() || null,
+      sort_code: sortCode.trim() || null,
+      account_number: accountNumber.trim() || null,
     };
     if (paymentModel === 'percentage_per_platform') {
       data.deliveroo_percentage = parseFloat(deliverooPct) || null;
@@ -122,7 +130,7 @@ export default function FranchiseeForm({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-lg rounded-xl bg-white dark:bg-neutral-800 p-6 shadow-2xl border border-slate-200 dark:border-neutral-600">
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white dark:bg-neutral-800 p-6 shadow-2xl border border-slate-200 dark:border-neutral-600">
         <div className="mb-6 flex items-center justify-between">
           <h2 className="text-xl font-bold text-slate-900 dark:text-neutral-100">
             {isEditing ? 'Edit Franchisee' : 'Add Franchisee'}
@@ -349,7 +357,7 @@ export default function FranchiseeForm({
                   onChange={() => setPaymentDirection('collect_fees')}
                   className="text-primary focus:ring-primary"
                 />
-                <span className="text-sm text-slate-700 dark:text-neutral-200">We collect fees (franchisee pays us)</span>
+                <span className="text-sm text-slate-700 dark:text-neutral-200">Franchisee pays us</span>
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -362,6 +370,64 @@ export default function FranchiseeForm({
                 />
                 <span className="text-sm text-slate-700 dark:text-neutral-200">We pay them (e.g. we hold Deliveroo, pay them minus our fees)</span>
               </label>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 dark:border-neutral-700 p-4">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-neutral-100">Franchisee bank details</h3>
+            <div className="mt-3 space-y-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">
+                  Account name
+                </label>
+                <input
+                  type="text"
+                  value={bankAccountName}
+                  onChange={(e) => setBankAccountName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  placeholder="e.g. Sparkeline Ltd"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">
+                  Bank name
+                </label>
+                <input
+                  type="text"
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  placeholder="e.g. Barclays"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">
+                    Sort code
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={sortCode}
+                    onChange={(e) => setSortCode(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="00-00-00"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-neutral-200">
+                    Account number
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={accountNumber}
+                    onChange={(e) => setAccountNumber(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 dark:border-neutral-600 dark:bg-neutral-700 dark:text-neutral-100 px-3 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="12345678"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 

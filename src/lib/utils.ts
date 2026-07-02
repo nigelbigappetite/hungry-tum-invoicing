@@ -51,57 +51,6 @@ export function cn(...classes: (string | undefined | null | false)[]): string {
 }
 
 /**
- * Next Friday from a given date (e.g. invoice date).
- * If the date is already a Friday, returns the following Friday.
- */
-export function getNextFridayFromDate(dateInput: string | Date): Date {
-  const d = typeof dateInput === 'string' ? parseISO(dateInput) : new Date(dateInput);
-  const day = d.getDay(); // 0 = Sun, 5 = Fri, 6 = Sat
-  const daysToAdd = day === 5 ? 7 : (5 - day + 7) % 7;
-  return addDays(d, daysToAdd);
-}
-
-/**
- * Recommended BACS collection date = next Friday after the invoice date.
- * Same day for all franchisees regardless of which platforms they use.
- */
-export function getRecommendedBacsDate(weekEndDate: string): Date {
-  const weekEnd = parseISO(weekEndDate);
-  const mondayAfterWeek = addDays(weekEnd, 1); // Monday after invoice week
-  const fridayOfFollowingWeek = addDays(mondayAfterWeek, 11); // +7 to next week, +4 to Friday
-  return fridayOfFollowingWeek;
-}
-
-export function formatRecommendedBacsDate(weekEndDate: string): string {
-  const d = getRecommendedBacsDate(weekEndDate);
-  return format(d, 'EEE d MMM yyyy');
-}
-
-/** Format BACS collection date from invoice date: the next Friday after that date. */
-export function formatRecommendedBacsDateFromInvoiceDate(invoiceDate: string): string {
-  const d = getNextFridayFromDate(invoiceDate);
-  return format(d, 'EEE d MMM yyyy');
-}
-
-/** Return the next N Fridays from today as { label, value } options. */
-export function getUpcomingFridays(count = 5): { label: string; value: string }[] {
-  const options: { label: string; value: string }[] = [];
-  const today = new Date();
-  // Find next Friday (or today if it's Friday)
-  const dayOfWeek = today.getDay(); // 0 = Sun, 5 = Fri
-  const daysUntilFriday = dayOfWeek <= 5 ? 5 - dayOfWeek : 6;
-  let friday = addDays(today, daysUntilFriday === 0 ? 0 : daysUntilFriday);
-  for (let i = 0; i < count; i++) {
-    options.push({
-      label: format(friday, 'EEE d MMM yyyy'),
-      value: format(friday, 'yyyy-MM-dd'),
-    });
-    friday = addDays(friday, 7);
-  }
-  return options;
-}
-
-/**
  * Slerp: payout every Monday for a Tue–Mon sales period, after 7 days maturity.
  * For a fulfillment date, first find the Monday that ends its Tue–Mon sales period,
  * then add 7 days to get the payout Monday.

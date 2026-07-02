@@ -3,6 +3,13 @@ import { createClient } from '@/lib/supabase/server';
 import { getPlatformFeeRate } from '@/lib/utils';
 import type { Platform, Franchisee } from '@/lib/types';
 
+function formatDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -96,6 +103,7 @@ export async function POST(request: NextRequest) {
 
     let invoice;
     let created = false;
+    const today = formatDateOnly(new Date());
 
     if (toKeep) {
       const { data: updated, error: updateError } = await supabase
@@ -129,6 +137,7 @@ export async function POST(request: NextRequest) {
           total_gross_revenue: roundedGross,
           fee_percentage: effectivePct,
           fee_amount: roundedFee,
+          invoice_date: today,
           status: 'draft',
         })
         .select('*')

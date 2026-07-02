@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
 
     if (franchisee.payment_direction !== 'pay_them') {
       return NextResponse.json(
-        { error: 'Record payment is only for franchisees we pay (payment direction: We pay them). Use the status dropdown or BACS for others.' },
+        { error: 'Record payment is only for franchisees we pay (payment direction: We pay them). Use the status dropdown for others.' },
         { status: 400 }
       );
     }

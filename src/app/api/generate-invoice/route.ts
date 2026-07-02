@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
-import { formatRecommendedBacsDateFromInvoiceDate, formatWeekRange } from '@/lib/utils';
+import { formatWeekRange } from '@/lib/utils';
 import { createElement } from 'react';
 import { isExtendedInvoiceRange } from '@/lib/monthly-invoice-revenue';
 
@@ -95,11 +95,7 @@ export async function POST(request: NextRequest) {
       accountNumber: process.env.INVOICE_ACCOUNT_NUMBER || undefined,
     };
 
-    // If franchisee has BACS and we collect fees, show collection date; for pay_them we pay them, no BACS
     const payThem = franchisee.payment_direction === 'pay_them';
-    const bacsCollectionDate = !payThem && franchisee.bacs_payment_method_id && invoice.created_at
-      ? formatRecommendedBacsDateFromInvoiceDate(invoice.created_at)
-      : undefined;
 
     // For pay_them: amount we pay = Deliveroo gross − our fees (D+U+J)
     const reportsList = aggregatorReports || [];
@@ -129,7 +125,6 @@ export async function POST(request: NextRequest) {
       franchisee,
       reports: reports || [],
       paymentDetails,
-      bacsCollectionDate,
       amountWePay,
       logoPath,
       businessAddressLines,

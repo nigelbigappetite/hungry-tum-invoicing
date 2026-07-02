@@ -78,6 +78,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'invoiceMonth must be in yyyy-MM format.' }, { status: 400 });
     }
     const { periodStart, periodEnd } = selectedRange ?? getLastFullMonthRange();
+    const today = formatDateOnly(new Date());
     const periodLabel = selectedRange?.label ?? 'last month';
     const { data: revenueRows, error: revenueError } = await supabase
       .from('weekly_reports')
@@ -143,6 +144,7 @@ export async function POST(request: NextRequest) {
         total_gross_revenue: totalGrossRevenue,
         fee_percentage: 0,
         fee_amount: feeAmount,
+        invoice_date: today,
         status: 'draft',
       })
       .select('*')

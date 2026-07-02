@@ -20,8 +20,11 @@ CREATE TABLE IF NOT EXISTS public.franchisees (
   justeat_percentage numeric,
   slerp_percentage numeric,
   payment_direction text NOT NULL DEFAULT 'collect_fees' CHECK (payment_direction IN ('collect_fees', 'pay_them')),
+  bank_account_name text,
+  bank_name text,
+  sort_code text,
+  account_number text,
   stripe_customer_id text,
-  bacs_payment_method_id text,
   created_at timestamptz DEFAULT now()
 );
 
@@ -51,11 +54,11 @@ CREATE TABLE IF NOT EXISTS public.invoices (
   total_gross_revenue numeric NOT NULL,
   fee_percentage numeric NOT NULL,
   fee_amount numeric NOT NULL,
+  invoice_date date NOT NULL DEFAULT current_date,
   status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'sent', 'processing', 'paid', 'failed')),
   pdf_path text,
   payment_intent_id text,
   payment_failure_reason text,
-  collect_from_date date,
   created_at timestamptz DEFAULT now()
 );
 
