@@ -441,7 +441,8 @@ export default function AnalyticsPage() {
                   <th className="pb-2 pr-4 text-right">Gross Revenue</th>
                   <th className="pb-2 pr-4 text-right">Fee</th>
                   <th className="pb-2 pr-4 text-right">Fee goes to</th>
-                  <th className="pb-2 text-right">Gross minus fee</th>
+                  <th className="pb-2 pr-4 text-right">Gross minus fee</th>
+                  <th className="pb-2 text-right">Banked from platforms</th>
                 </tr>
               </thead>
               <tbody>
@@ -466,11 +467,21 @@ export default function AnalyticsPage() {
                         <span className="text-primary">Hungry Tum</span>
                       )}
                     </td>
-                    <td className="py-2.5 text-right text-slate-600 dark:text-neutral-300">{formatCurrency(b.net)}</td>
+                    <td className="py-2.5 pr-4 text-right text-slate-600 dark:text-neutral-300">{formatCurrency(b.net)}</td>
+                    <td className="py-2.5 text-right">
+                      {b.payoutCount > 0 ? (
+                        <>
+                          <span className="font-medium text-slate-700 dark:text-neutral-300">{formatCurrency(b.payout)}</span>
+                          <div className="text-[10px] text-slate-400 dark:text-neutral-500">{b.payoutCount} wk{b.payoutCount !== 1 ? 's' : ''} data</div>
+                        </>
+                      ) : (
+                        <span className="text-slate-300 dark:text-neutral-600">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {revenueByBrand.length === 0 && (
-                  <tr><td colSpan={5} className="py-6 text-center text-slate-500 dark:text-neutral-400">No data for this period</td></tr>
+                  <tr><td colSpan={6} className="py-6 text-center text-slate-500 dark:text-neutral-400">No data for this period</td></tr>
                 )}
               </tbody>
               {revenueByBrand.length > 0 && (
@@ -480,7 +491,12 @@ export default function AnalyticsPage() {
                     <td className="pt-3 pr-4 text-right">{formatCurrency(revenueByBrand.reduce((s, b) => s + b.gross, 0))}</td>
                     <td className="pt-3 pr-4 text-right text-primary">{formatCurrency(revenueByBrand.reduce((s, b) => s + b.fee, 0))}</td>
                     <td className="pt-3 pr-4" />
-                    <td className="pt-3 text-right">{formatCurrency(revenueByBrand.reduce((s, b) => s + b.net, 0))}</td>
+                    <td className="pt-3 pr-4 text-right">{formatCurrency(revenueByBrand.reduce((s, b) => s + b.net, 0))}</td>
+                    <td className="pt-3 text-right">
+                      {revenueByBrand.some((b) => b.payoutCount > 0)
+                        ? formatCurrency(revenueByBrand.reduce((s, b) => s + b.payout, 0))
+                        : <span className="text-slate-300 dark:text-neutral-600">—</span>}
+                    </td>
                   </tr>
                 </tfoot>
               )}
