@@ -4,7 +4,7 @@
 
 ## Mission
 
-Franchise fee invoicing system for Hungry Tum. Ingests weekly delivery platform reports (Deliveroo, Uber Eats, Just Eat, Slerp), calculates franchise fees as a percentage of gross revenue, generates PDF invoices, and collects payment via Stripe BACS Direct Debit.
+Franchise fee invoicing system for Hungry Tum. Ingests weekly delivery platform reports (Deliveroo, Uber Eats, Just Eat, Slerp), calculates franchise fees as a percentage of gross revenue, generates PDF invoices, and sends them via email. **Stripe/BACS has been fully removed** — payment collection is now manual.
 
 ## Status
 
@@ -14,10 +14,10 @@ Franchise fee invoicing system for Hungry Tum. Ingests weekly delivery platform 
 
 ## Core User Flows
 
-1. **Admin** — uploads weekly CSV/PDF reports per franchisee per platform → system parses revenue → generates draft invoice
-2. **Admin** — sends invoice to franchisee via email (Resend) + triggers Stripe BACS collection
-3. **Franchisee** — receives invoice email → sets up BACS mandate via Stripe → gets auto-charged on future invoices
-4. **Admin** — monitors payment status across all franchisees, views revenue dashboard
+1. **Admin** → goes to Weekly Hub (`/weekly`) → selects week → uploads CSV/PDF reports per franchisee per platform
+2. **Admin** → generates invoice from uploaded reports → reviews draft PDF
+3. **Admin** → sends invoice via email (Resend, verified domain) to franchisee
+4. **Admin** → manually records payment when received → monitors status on dashboard
 
 ## Tech Stack
 
@@ -28,66 +28,84 @@ Franchise fee invoicing system for Hungry Tum. Ingests weekly delivery platform 
 | Styling | Tailwind CSS v4 |
 | Auth | Supabase Auth |
 | Database | Supabase (PostgreSQL) |
-| Payments | Stripe (BACS Direct Debit + card) |
-| Email | Resend |
+| Email | Resend (verified domain required) |
 | PDF | @react-pdf/renderer |
 | File parsing | PapaParse (CSV), pdf-parse (PDF), XLSX |
 | Deployment | Vercel |
 
+**Stripe has been fully removed.** No BACS, no card, no webhooks. Remove any remaining Stripe env vars from Vercel if present.
+
 ## Architecture
+
+Source code lives under `src/` — paths are `src/app/`, `src/components/`, `src/lib/`.
 
 ### Route Map
 
 ```
-app/
-├── (dashboard)/              — protected franchisee + invoice management pages
-│   ├── page.tsx              — dashboard overview
-│   ├── franchisees/          — franchisee list + management
-│   ├── invoices/             — invoice list + detail
-│   └── reports/              — weekly report uploads
-├── login/                    — auth
-├── reset-password/           — password reset
-├── bacs-setup-complete/      — BACS mandate confirmation landing page
+src/app/
+├── (dashboard)/                — auth-protected admin pages
+│   ├── page.tsx                — dashboard: This Week's Fees + Total Fee Income stats
+│   ├── franchisees/            — franchisee list
+│   │   └── [id]/page.tsx       — franchisee detail (bank details, invoices, reports)
+│   ├── weekly/page.tsx         — Weekly Hub: upload reports, generate + manage invoices per week
+│   └── analytics/page.tsx      — analytics overview
+├── login/                      — Supabase auth login
+├── reset-password/             — password reset
 └── api/
-    ├── parse-file/           — CSV/PDF/XLSX report ingestion
-    ├── webhooks/stripe/      — BACS setup + payment webhooks
-    ├── create-monthly-invoice/  — invoice generation trigger
-    ├── charge-invoice-bacs/  — initiate BACS collection
-    ├── send-invoice-email/   — Resend invoice email
-    └── generate-invoice/     — PDF generation
+    ├── parse-file/             — CSV/PDF/XLSX report ingestion (multi-format)
+    ├── generate-invoice/       — PDF generation (@react-pdf/renderer, server-side only)
+    ├── generate-weekly-invoice/— invoice generation from weekly report data
+    ├── create-monthly-invoice/ — invoice generation trigger (legacy, still present)
+    ├── send-invoice-email/     — Resend invoice email (uses verified domain)
+    ├── update-invoice/         — invoice status + field updates
+    └── record-invoice-paid/    — mark invoice as paid
 ```
+
+**Removed routes** (do not recreate): `charge-invoice-bacs`, `clear-bacs`, `confirm-bacs-setup`, `setup-bacs`, `sync-bacs-status`, `webhooks/stripe`, `approve-email-draft`, `discard-email-draft`, `create-catch-up-invoice`, `create-payment-session`
+
+**Removed pages** (do not recreate): `bacs-setup-complete`, `invoices/`, `upload/`
 
 ### Invoice Flow
 
-1. Admin uploads weekly report (CSV/PDF) → `/api/parse-file` extracts revenue per platform
-2. Revenue stored in `weekly_reports` against franchisee + week
+1. Admin uploads weekly report (CSV/PDF/XLSX) via Weekly Hub → `/api/parse-file` extracts revenue + financial breakdown
+2. Revenue stored in `weekly_reports` against franchisee + week (includes platform commission, ad spend, delivery fee, adjustments, net payout, order count)
 3. Admin triggers invoice generation → fee % applied → `invoices` record created (status: Draft)
-4. Admin sends invoice → Resend email + optional Stripe BACS charge
-5. Stripe webhook updates `invoices.status` → Paid on success
-
-### BACS Flow
-
-1. Franchisee receives setup email with Stripe BACS mandate link
-2. Franchisee completes mandate → `stripe_customer_id` + `bacs_payment_method_id` stored on franchisee
-3. Future invoices auto-charged via `/api/charge-invoice-bacs`
-4. `bacs-setup-complete` page confirms setup to franchisee
+4. Admin reviews PDF, sends via Resend email
+5. Admin manually marks invoice paid via `/api/record-invoice-paid`
 
 ### Key Files
 
-- `lib/supabase/` — DB client setup
-- `middleware.ts` — auth protection
-- `app/api/parse-file/` — multi-format report parser (CSV, PDF, XLSX)
-- `app/api/generate-invoice/` — PDF invoice renderer
+- `src/lib/supabase/` — DB client setup
+- `src/middleware.ts` — auth route protection
+- `src/app/api/parse-file/` — multi-format parser (CSV, PDF, XLSX)
+- `src/app/api/generate-invoice/` — PDF invoice renderer (server-side only)
+- `src/app/(dashboard)/weekly/page.tsx` — Weekly Hub (primary admin workflow)
+- `src/components/InvoicePDF.tsx` — PDF template (includes TZ gross revenue + fee breakdown)
+- `src/lib/parsers/csv-parser.ts` — CSV parser with financial breakdown fields
+- `src/lib/parsers/pdf-parser.ts` — PDF parser with financial breakdown fields
+- `src/components/FranchiseeForm.tsx` — franchisee create/edit (includes bank details fields)
+
+### Dashboard Metrics
+
+- **This Week's Fees** — sum of current-week invoice totals (replaced "Outstanding Fees")
+- **Total Fee Income** — sum of all paid invoice fees (replaced "Total Invoices")
 
 ## Database
 
-9 migrations in `supabase/migrations/`.
+11+ migrations in `supabase/migrations/`.
 
 **Key tables:**
-- `franchisees` — name, email, fee_percentage, stripe_customer_id, bacs_payment_method_id
-- `weekly_reports` — franchisee_id, platform (uber_eats|deliveroo|just_eat|slerp), gross_revenue, week_start
-- `invoices` — franchisee_id, status (Draft|Sent|Paid), fee_amount, period_start, period_end
-- `brands` — brand catalogue (added in recent migration)
+- `franchisees` — name, email, fee_percentage, bank details (sort_code, account_number, bank_name added in migration `20260702000000`)
+- `weekly_reports` — franchisee_id, platform, gross_revenue, week_start, plus financial breakdown columns: platform_commission, ad_spend, delivery_fee, adjustments, net_payout, order_count, platform_payout
+- `invoices` — franchisee_id, status (Draft|Sent|Paid), fee_amount, period_start, period_end, invoice_date
+- `brands` — brand catalogue
+
+**Recent migrations (in order):**
+- `20260401_report_financials_ad_spend` — ad spend + financial fields on weekly_reports
+- `20260628000000_add_platform_payout` — platform_payout column
+- `20260628000001_add_financial_breakdown` — full financial breakdown columns
+- `20260702000000_invoice_date_and_franchisee_bank_details` — invoice_date field + franchisee bank details
+- `20260702000001_remove_bacs` — removes BACS/Stripe columns from franchisees
 
 **Platforms supported:** `uber_eats`, `deliveroo`, `just_eat`, `slerp`
 
@@ -99,20 +117,21 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 
-# Stripe
-STRIPE_SECRET_KEY=
-STRIPE_WEBHOOK_SECRET=
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
-
-# Email (Resend)
+# Email (Resend) — must use a verified sending domain
 RESEND_API_KEY=
 
-# Invoice details (appear on PDF)
-INVOICE_BANK_NAME=
-INVOICE_SORT_CODE=
-INVOICE_ACCOUNT_NUMBER=
+# Invoice defaults (appear on PDF if franchisee has no bank details set)
 INVOICE_COMPANY_NAME=
 ```
+
+**Stripe vars are no longer needed** — remove `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` from Vercel if still set.
+
+## UI / Styling Notes
+
+- Light mode: white sidebar, orange primary buttons, bold-black primary text
+- Dark mode: unchanged
+- Stat card icons use simplified neutral style
+- Brand colour: Hungry Tum orange (`#FF6B35` / Tailwind `brand-primary`)
 
 ## Project Connections
 
@@ -120,7 +139,7 @@ INVOICE_COMPANY_NAME=
 |-----------|---------|-----|
 | Receives from | `hungry-tum-ordering` | Order/sales data informs which franchisees need invoicing |
 | Receives from | `hungry-tum-partners` | Delivery platform sales data (same source: Uber/Deliveroo/Just Eat) |
-| Standalone | — | Stripe + Resend integrations are self-contained |
+| Standalone | — | Resend email is self-contained |
 
 ## Agent Instructions
 
@@ -128,30 +147,21 @@ INVOICE_COMPANY_NAME=
 - Read and modify any file in this repo
 - Run `npm run dev`, `npm run build`, `npm run lint`
 - Add new platform types to the parser
-- Extend invoice PDF templates
+- Extend invoice PDF templates (`src/components/InvoicePDF.tsx`)
 - Write new API routes following existing patterns
 
 ### You MUST NOT:
 - Push to `main` or deploy without explicit user approval
 - Delete or modify existing migrations
 - Hard-code secrets or API keys
-- Trigger real Stripe BACS charges during development
+- Recreate any of the removed BACS/Stripe routes or pages
+- Add Stripe back without explicit instruction
 
 ### Patterns to follow:
-- File parsing is multi-format — check `parse-file` before adding new file type support
-- PDF generation is server-side only (`@react-pdf/renderer`)
-- Revenue values: check whether stored as float or minor units before arithmetic (verify in migrations)
-- Always handle Stripe webhook idempotency — webhook may fire multiple times
-
-## Constraints & Non-Negotiables
-
-- BACS mandates are real financial instruments — never trigger in dev/test without Stripe test mode
-- Stripe webhook must be verified with `STRIPE_WEBHOOK_SECRET` before processing
-
-## Known Issues / Backlog
-
-- [ ] CSV column names for Uber report exports are unverified — need real Uber export to confirm headers (same issue noted in hungry-tum-partners)
-- [ ] Slerp platform support added in recent migration — verify parser handles it fully
+- File parsing is multi-format — check `src/app/api/parse-file/` before adding new file type support
+- PDF generation is server-side only (`@react-pdf/renderer` — never import in client components)
+- Revenue values are stored as floats (not minor units) — verify in migrations before arithmetic
+- Weekly Hub (`/weekly`) is the primary admin workflow — new invoice-related features should fit here
 
 ## Commands
 
@@ -162,4 +172,4 @@ npm run lint     # ESLint
 ```
 
 ---
-*Last updated: 2026-04-01*
+*Last updated: 2026-07-04*
