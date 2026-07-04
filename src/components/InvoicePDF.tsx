@@ -327,9 +327,30 @@ function getInvoiceBrandFallback(invoice: Invoice): string | null {
   return brands.length === 1 ? brands[0] : null;
 }
 
+function formatPercentageLabel(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function isTzPeriPeriInvoice(franchisee: Franchisee): boolean {
+  const text = [
+    franchisee.name,
+    franchisee.location,
+    franchisee.email,
+    franchisee.business_address,
+    franchisee.site_address,
+    ...(Array.isArray(franchisee.brands) ? franchisee.brands : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return /\bt\s*z\b|\btz\b|tz group/.test(text) || text.includes('peri');
+}
+
 export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, logoPath, businessAddressLines }: InvoicePDFProps) {
   const payThem = franchisee.payment_direction === 'pay_them';
   const showLogo = Boolean(logoPath?.trim());
+  const hidePlatformCommission = isTzPeriPeriInvoice(franchisee);
   const platformReports = [...(reports || []), ...(slerpReports || [])].filter((r) =>
     r && INVOICE_PLATFORMS.includes(r.platform as typeof INVOICE_PLATFORMS[number])
   );
@@ -347,6 +368,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
       const grossRevenue = Math.round(rs.reduce((s, r) => s + Number(r.gross_revenue ?? 0), 0) * 100) / 100;
       const platformPayout = Math.round(rs.reduce((s, r) => s + Number(r.platform_payout ?? 0), 0) * 100) / 100;
       const pct = getPlatformFeeRate(franchisee, platform as Platform);
+      const pctLabel = formatPercentageLabel(pct);
       const fee = Math.round(grossRevenue * (pct / 100) * 100) / 100;
       // Aggregate breakdown fields across all reports for this platform
       const earnings = Math.round(rs.reduce((s, r) => {
@@ -358,7 +380,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
       const offerRedemption = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.offer_redemption ?? 0), 0) * 100) / 100;
       const adjustments = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.adjustments ?? 0), 0) * 100) / 100;
       const hasBreakdown = commission > 0 || adSpend > 0 || offerRedemption > 0;
-      return { platform, grossRevenue, fee, pct, platformPayout, hasBreakdown, earnings, commission, adSpend, offerRedemption, adjustments };
+      return { platform, grossRevenue, fee, pct, pctLabel, platformPayout, hasBreakdown, earnings, commission, adSpend, offerRedemption, adjustments };
     })
     .filter((b) => b.grossRevenue > 0 || b.platformPayout > 0);
 
@@ -569,7 +591,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   {/* Platform header */}
                   <View style={styles.platformSectionHeader}>
                     <Text style={styles.platformSectionHeaderText}>
-                      {PLATFORM_LABELS[block.platform]}
+                      {`${PLATFORM_LABELS[block.platform]} (${block.pctLabel}%)`}
                     </Text>
                   </View>
 
@@ -584,15 +606,13 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   {/* HT fee */}
                   <View style={styles.breakdownRow}>
                     <Text style={styles.breakdownLabel}>
-                      {franchisee.payment_model !== 'percentage_per_platform'
-                        ? `Hungry Tum fee (${block.pct}% of gross revenue)`
-                        : 'Hungry Tum fee'}
+                      {`Hungry Tum fee (${block.pctLabel}% of gross revenue)`}
                     </Text>
                     <Text style={styles.breakdownAmount}>-{formatGBP(block.fee)}</Text>
                   </View>
 
                   {/* Platform commission */}
-                  {(block.commission > 0 || block.adSpend > 0) && (
+                  {!hidePlatformCommission && (block.commission > 0 || block.adSpend > 0) && (
                     <View style={styles.breakdownRow}>
                       <Text style={styles.breakdownLabel}>Platform commission</Text>
                       <Text style={styles.breakdownAmount}>
@@ -620,7 +640,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   )}
 
                   {/* Platform payout subtotal */}
-                  {block.platformPayout > 0 && (
+                  {block.platformPayout > 0 && !(hidePlatformCommission && block.platform === 'deliveroo') && (
                     <View style={styles.breakdownSubtotalRow}>
                       <Text style={styles.breakdownSubtotalLabel}>Platform payout received</Text>
                       <Text style={styles.breakdownSubtotalAmount}>{formatGBP(block.platformPayout)}</Text>
@@ -642,7 +662,9 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
 
               <View style={styles.grandTotalDeductRow}>
                 <Text style={{ ...styles.breakdownLabel, width: '65%' }}>
-                  {`Total Hungry Tum fee${franchisee.payment_model !== 'percentage_per_platform' ? ` (${invoice.fee_percentage}%)` : ''}`}
+                  {franchisee.payment_model === 'percentage_per_platform'
+                    ? 'Total Hungry Tum fee'
+                    : `Total Hungry Tum fee (${invoice.fee_percentage}%)`}
                 </Text>
                 <Text style={{ ...styles.breakdownAmount, width: '35%' }}>
                   -{formatGBP(platformFeeTotal)}
