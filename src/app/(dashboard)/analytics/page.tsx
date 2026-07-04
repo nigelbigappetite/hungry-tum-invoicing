@@ -254,11 +254,13 @@ export default function AnalyticsPage() {
     });
     return Object.entries(map)
       .map(([name, d]) => {
-        // Use platform_payout as the base for "franchisee keeps" when available —
-        // it already deducts platform commission, ad spend, and adjustments.
-        // Fall back to gross when payout data is missing (manual entries, Slerp etc.)
-        const payoutBase = d.payoutCount > 0 ? d.payout : d.gross;
-        return { name, ...d, net: payoutBase - d.fee };
+        // "Franchisee net" = gross minus franchise fee.
+        // This is before platform commission, ad spend and offer deductions —
+        // those vary per week and are only available on CSV-uploaded weeks.
+        // platform_payout data is tracked on d.payout but not used here because
+        // it's only populated for weeks with a CSV upload, making it unreliable
+        // as an all-time total when mixed with manual-entry weeks.
+        return { name, ...d, net: d.gross - d.fee };
       })
       .sort((a, b) => b.gross - a.gross);
   }, [filteredReports, filteredInvoices, brands]);
@@ -439,7 +441,7 @@ export default function AnalyticsPage() {
                   <th className="pb-2 pr-4 text-right">Gross Revenue</th>
                   <th className="pb-2 pr-4 text-right">Fee</th>
                   <th className="pb-2 pr-4 text-right">Fee goes to</th>
-                  <th className="pb-2 text-right">Franchisee net</th>
+                  <th className="pb-2 text-right">Gross minus fee</th>
                 </tr>
               </thead>
               <tbody>
