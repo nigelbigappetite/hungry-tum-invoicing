@@ -158,6 +158,26 @@ function extractDeliverooWeek(text: string): { week_start_date: string; week_end
   return getWeekRangeFromDate(date);
 }
 
+/**
+ * For multi-site Deliveroo statements (Site Breakdown section), extract the payout
+ * for Hungry Tum sites only — not the combined "Total payable to [company]" figure.
+ * Looks for each HT brand name and finds the "Total payable to site" that follows it.
+ */
+function extractHungryTumSitePayout(text: string): number | undefined {
+  for (const brandRe of DELIVEROO_HUNGRY_TUM_BRAND_PATTERNS) {
+    const globalRe = new RegExp(brandRe.source, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = globalRe.exec(text)) !== null) {
+      const after = text.slice(match.index + match[0].length, match.index + match[0].length + 500);
+      const payoutMatch = after.match(/Total\s+payable\s+to\s+site[^£]*£\s*([\d,]+\.?\d*)/i);
+      if (payoutMatch?.[1]) {
+        return parseFloat(payoutMatch[1].replace(/,/g, ''));
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Extract Deliveroo financial breakdown from PDF text. */
 function extractDeliverooFinancials(text: string): Pick<PDFParseResult, 'platform_commission' | 'delivery_fee' | 'ad_spend' | 'restaurant_offers' | 'adjustments' | 'net_payout' | 'order_count'> {
   const parseAmount = (m: RegExpMatchArray | null) =>
@@ -222,9 +242,12 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
   const wholeDoc = sumHungryTumTotalOrderValueInText(text);
   if (wholeDoc.foundAny) {
     const tov = Math.round(wholeDoc.sum * 100) / 100;
+    // For multi-site statements (e.g. Wing Shack + Fireaway on same account), use the
+    // site-specific "Total payable to site" rather than the combined company-level total.
+    const sitePayout = extractHungryTumSitePayout(text) ?? financials.net_payout;
     return {
       gross_revenue: tov,
-      platform_payout: financials.net_payout,
+      platform_payout: sitePayout,
       financial_breakdown: buildBreakdown(tov),
       confidence: 'high',
       matched_pattern: 'Hungry Tum brands only (per-brand Total Order Value)',

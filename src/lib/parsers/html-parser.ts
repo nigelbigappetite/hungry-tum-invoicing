@@ -10,7 +10,8 @@ export interface HTMLParseResult {
   /** Financial breakdown fields — populated for Just Eat HTML. */
   platform_commission?: number;
   restaurant_offers?: number;
-  net_payout?: number;
+  /** Actual payout transferred by Just Eat — "You will receive from Just Eat" figure. */
+  platform_payout?: number;
   order_count?: number;
 }
 
@@ -75,10 +76,14 @@ export function parseJustEatHTML(html: string): HTMLParseResult {
   // Extract financial breakdown
   const netPayoutMatch = text.match(/[Yy]ou\s+will\s+receive\s+from\s+Just\s+Eat\s*£([\d,]+\.?\d*)/i);
   const orderCountMatch = text.match(/Number\s+of\s+orders\s+(\d+)/i);
-  const commissionMatch = text.match(/[Cc]ommission[^£\n]{0,60}£([\d,]+\.?\d*)/);
+  // Commission line format: "14% Commission on Gross Order Value of £337.60 (VAT @ 20%) £47.26"
+  // The GOV (£337.60) precedes the actual commission (£47.26) — skip past it to capture the right figure.
+  const commissionFull = text.match(/[Cc]ommission[^£]*£[\d,]+\.?\d*[^£]*£([\d,]+\.?\d*)/);
+  const commissionSimple = text.match(/[Cc]ommission\s*£([\d,]+\.?\d*)/);
+  const commissionMatch = commissionFull ?? commissionSimple;
   const offersMatch = text.match(/[Pp]romotion[^£\n]{0,60}£([\d,]+\.?\d*)/);
   const financials = {
-    net_payout: netPayoutMatch ? parseFloat(netPayoutMatch[1].replace(/,/g, '')) : undefined,
+    platform_payout: netPayoutMatch ? parseFloat(netPayoutMatch[1].replace(/,/g, '')) : undefined,
     order_count: orderCountMatch ? parseInt(orderCountMatch[1]) : undefined,
     platform_commission: commissionMatch ? parseFloat(commissionMatch[1].replace(/,/g, '')) : undefined,
     restaurant_offers: offersMatch ? parseFloat(offersMatch[1].replace(/,/g, '')) : undefined,
