@@ -670,14 +670,17 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 </View>
               )}
 
-              <View style={styles.payoutRow}>
-                <Text style={styles.payoutLabel}>
-                  {isFeeOnlyInvoice ? 'Total Hungry Tum fee' : 'Your payout this week'}
-                </Text>
-                <Text style={styles.payoutAmount}>
-                  {formatGBP(isFeeOnlyInvoice ? platformFeeTotal : kitchenPayout)}
-                </Text>
-              </View>
+              {isFeeOnlyInvoice ? (
+                <View style={styles.grandTotalRow}>
+                  <Text style={{ ...styles.totalLabel, width: '65%' }}>Total Hungry Tum fee</Text>
+                  <Text style={{ ...styles.totalAmount, width: '35%' }}>{formatGBP(platformFeeTotal)}</Text>
+                </View>
+              ) : (
+                <View style={styles.payoutRow}>
+                  <Text style={styles.payoutLabel}>Your payout this week</Text>
+                  <Text style={styles.payoutAmount}>{formatGBP(kitchenPayout)}</Text>
+                </View>
+              )}
             </>
           )}
 
