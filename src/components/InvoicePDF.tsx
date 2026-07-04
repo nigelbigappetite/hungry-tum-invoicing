@@ -351,6 +351,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const payThem = franchisee.payment_direction === 'pay_them';
   const showLogo = Boolean(logoPath?.trim());
   const hidePlatformCommission = isTzPeriPeriInvoice(franchisee);
+  const isFeeOnlyInvoice = hidePlatformCommission;
   const platformReports = [...(reports || []), ...(slerpReports || [])].filter((r) =>
     r && INVOICE_PLATFORMS.includes(r.platform as typeof INVOICE_PLATFORMS[number])
   );
@@ -396,10 +397,6 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed';
   const isMaidstoneSite = ((franchisee.location || '').toLowerCase().includes('maidstone') || (franchisee.name || '').toLowerCase().includes('maidstone'));
   const periodLabel = `${formatDateStr(invoice.week_start_date)} - ${formatDateStr(invoice.week_end_date)}`;
-  const standardWeeklyFeeLabel =
-    franchisee.payment_model === 'percentage_per_platform'
-      ? 'Total franchise fee'
-      : `Total franchise fee (${invoice.fee_percentage}%)`;
   const displayedInvoiceFeeAmount =
     !isMonthlyFixedInvoice && !isCatchUpInvoice
       ? platformFeeTotal
@@ -653,27 +650,33 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
               ))}
 
               {/* Grand totals */}
-              {hasPayoutData && (
+              {hasPayoutData && !isFeeOnlyInvoice && (
                 <View style={styles.grandTotalRow}>
                   <Text style={{ ...styles.totalLabel, width: '65%' }}>Total platform payout received</Text>
                   <Text style={{ ...styles.totalAmount, width: '35%' }}>{formatGBP(platformPayoutTotal)}</Text>
                 </View>
               )}
 
-              <View style={styles.grandTotalDeductRow}>
-                <Text style={{ ...styles.breakdownLabel, width: '65%' }}>
-                  {franchisee.payment_model === 'percentage_per_platform'
-                    ? 'Total Hungry Tum fee'
-                    : `Total Hungry Tum fee (${invoice.fee_percentage}%)`}
-                </Text>
-                <Text style={{ ...styles.breakdownAmount, width: '35%' }}>
-                  -{formatGBP(platformFeeTotal)}
-                </Text>
-              </View>
+              {!isFeeOnlyInvoice && (
+                <View style={styles.grandTotalDeductRow}>
+                  <Text style={{ ...styles.breakdownLabel, width: '65%' }}>
+                    {franchisee.payment_model === 'percentage_per_platform'
+                      ? 'Total Hungry Tum fee'
+                      : `Total Hungry Tum fee (${invoice.fee_percentage}%)`}
+                  </Text>
+                  <Text style={{ ...styles.breakdownAmount, width: '35%' }}>
+                    -{formatGBP(platformFeeTotal)}
+                  </Text>
+                </View>
+              )}
 
               <View style={styles.payoutRow}>
-                <Text style={styles.payoutLabel}>Your payout this week</Text>
-                <Text style={styles.payoutAmount}>{formatGBP(kitchenPayout)}</Text>
+                <Text style={styles.payoutLabel}>
+                  {isFeeOnlyInvoice ? 'Total Hungry Tum fee' : 'Your payout this week'}
+                </Text>
+                <Text style={styles.payoutAmount}>
+                  {formatGBP(isFeeOnlyInvoice ? platformFeeTotal : kitchenPayout)}
+                </Text>
               </View>
             </>
           )}
