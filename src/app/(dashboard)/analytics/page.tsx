@@ -28,6 +28,7 @@ interface WeeklyReportRow {
   platform: string;
   week_start_date: string;
   gross_revenue: number;
+  platform_payout: number | null;
 }
 
 interface InvoiceRow {
@@ -101,7 +102,7 @@ export default function AnalyticsPage() {
     async function load() {
       setLoading(true);
       const [rRes, iRes, bRes, fRes] = await Promise.all([
-        supabase.from('weekly_reports').select('franchisee_id,brand,platform,week_start_date,gross_revenue'),
+        supabase.from('weekly_reports').select('franchisee_id,brand,platform,week_start_date,gross_revenue,platform_payout'),
         supabase.from('invoices').select('franchisee_id,fee_amount,fee_percentage,total_gross_revenue,status,week_start_date,brands'),
         supabase.from('brands').select('*').eq('active', true).order('name'),
         supabase.from('franchisees').select('*').order('location'),
@@ -176,9 +177,12 @@ export default function AnalyticsPage() {
       const key = `${inv.franchisee_id}__${inv.week_start_date}`;
       const brandGross = brandGrossMap[key] ?? 0;
       const totalGross = totalGrossMap[key] ?? 0;
-      if (totalGross === 0) return;
 
-      const share = brandGross / totalGross;
+      // When no report data exists for this period (e.g. monthly-fixed invoices whose
+      // week_start_date is a month boundary rather than a Monday, or months with no
+      // uploaded reports), default to share = 1 so the full invoice fee is included
+      // rather than silently dropped. For single-brand franchisees this is always correct.
+      const share = totalGross === 0 ? 1 : brandGross / totalGross;
       const fee = Number(inv.fee_amount) * share;
       const isPaid = inv.status === 'paid';
 
@@ -230,12 +234,16 @@ export default function AnalyticsPage() {
 
   // ── Revenue by brand
   const revenueByBrand = useMemo(() => {
-    const map: Record<string, { gross: number; fee: number; isExternal: boolean; feeBeneficiary: string }> = {};
+    const map: Record<string, { gross: number; payout: number; payoutCount: number; fee: number; isExternal: boolean; feeBeneficiary: string }> = {};
     filteredReports.forEach((r) => {
       const name = r.brand ?? 'Unknown';
       const brandRecord = brands.find((b) => b.name === name);
-      if (!map[name]) map[name] = { gross: 0, fee: 0, isExternal: brandRecord?.is_external ?? false, feeBeneficiary: brandRecord?.fee_beneficiary ?? 'ht' };
+      if (!map[name]) map[name] = { gross: 0, payout: 0, payoutCount: 0, fee: 0, isExternal: brandRecord?.is_external ?? false, feeBeneficiary: brandRecord?.fee_beneficiary ?? 'ht' };
       map[name].gross += Number(r.gross_revenue);
+      if (r.platform_payout != null && r.platform_payout > 0) {
+        map[name].payout += Number(r.platform_payout);
+        map[name].payoutCount += 1;
+      }
     });
     Object.keys(map).forEach((name) => {
       const relatedInvoices = filteredInvoices.filter((inv) => (inv.brands ?? []).includes(name));
@@ -245,7 +253,13 @@ export default function AnalyticsPage() {
       map[name].fee = map[name].gross * (avgRate / 100);
     });
     return Object.entries(map)
-      .map(([name, d]) => ({ name, ...d, net: d.gross - d.fee }))
+      .map(([name, d]) => {
+        // Use platform_payout as the base for "franchisee keeps" when available —
+        // it already deducts platform commission, ad spend, and adjustments.
+        // Fall back to gross when payout data is missing (manual entries, Slerp etc.)
+        const payoutBase = d.payoutCount > 0 ? d.payout : d.gross;
+        return { name, ...d, net: payoutBase - d.fee };
+      })
       .sort((a, b) => b.gross - a.gross);
   }, [filteredReports, filteredInvoices, brands]);
 
@@ -425,7 +439,7 @@ export default function AnalyticsPage() {
                   <th className="pb-2 pr-4 text-right">Gross Revenue</th>
                   <th className="pb-2 pr-4 text-right">Fee</th>
                   <th className="pb-2 pr-4 text-right">Fee goes to</th>
-                  <th className="pb-2 text-right">Franchisee keeps</th>
+                  <th className="pb-2 text-right">Franchisee net</th>
                 </tr>
               </thead>
               <tbody>
