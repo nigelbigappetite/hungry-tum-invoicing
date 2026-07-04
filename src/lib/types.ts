@@ -58,6 +58,21 @@ export interface PlatformFinancialBreakdown {
   adjustments?: number;
 }
 
+/**
+ * A single week's data extracted from a multi-week Uber Eats CSV.
+ * Grouped by payout date — each payout date maps to one order week.
+ */
+export interface WeeklyCSVSplit {
+  week_start_date: string;
+  week_end_date: string;
+  /** Original payout date string from the CSV (DD/MM/YYYY). */
+  payout_date: string;
+  gross_revenue: number;
+  platform_payout?: number;
+  financial_breakdown?: PlatformFinancialBreakdown;
+  order_count: number;
+}
+
 export interface WeeklyReport {
   id: string;
   franchisee_id: string;
@@ -118,6 +133,11 @@ export interface ParsedFileResult {
   platform_payout?: number;
   /** Full financial breakdown from the platform statement. */
   financial_breakdown?: PlatformFinancialBreakdown;
+  /**
+   * Per-week splits when the uploaded file spans multiple payout periods (e.g. a monthly Uber Eats CSV).
+   * When present and length > 1, the UI should save each split as a separate weekly_report.
+   */
+  weekly_splits?: WeeklyCSVSplit[];
   file_type: FileType;
   raw_text?: string;
   confidence: 'high' | 'medium' | 'low';

@@ -9,6 +9,7 @@ import {
   InvoiceStatus,
   Platform,
   PlatformFinancialBreakdown,
+  WeeklyCSVSplit,
   STATUS_COLORS,
   STATUS_LABELS,
 } from '@/lib/types';
@@ -39,6 +40,8 @@ interface UploadCell {
   amount?: number;
   payout?: number;
   breakdown?: PlatformFinancialBreakdown;
+  /** Populated when the uploaded file spans multiple payout weeks. */
+  splits?: WeeklyCSVSplit[];
   file?: File;
   error?: string;
 }
@@ -284,10 +287,23 @@ export default function WeeklyHubPage() {
       const res = await fetch('/api/parse-file', { method: 'POST', body: formData });
       const data = await res.json().catch(() => ({}));
 
-      if (!res.ok || !data.gross_revenue) {
+      if (!res.ok || (!data.gross_revenue && !data.weekly_splits?.length)) {
         setUploadCells((prev) => ({
           ...prev,
           [key]: { state: 'idle', error: data.error || 'Could not parse file' },
+        }));
+        return;
+      }
+
+      // Multi-week file (e.g. monthly Uber Eats CSV) — store splits for bulk save
+      if (data.weekly_splits && data.weekly_splits.length > 1) {
+        setUploadCells((prev) => ({
+          ...prev,
+          [key]: {
+            state: 'ready',
+            splits: data.weekly_splits as WeeklyCSVSplit[],
+            file,
+          },
         }));
         return;
       }
@@ -365,6 +381,66 @@ export default function WeeklyHubPage() {
 
   const cancelUpload = (franchiseeId: string, platform: Platform) => {
     setUploadCells((prev) => ({ ...prev, [`${franchiseeId}_${platform}`]: { state: 'idle' } }));
+  };
+
+  /**
+   * Save all weeks from a multi-week Uber Eats CSV upload.
+   * Each split becomes its own weekly_report row. Invoices are not auto-generated
+   * so the admin can review each week and generate from there.
+   */
+  const confirmMultiWeekUpload = async (franchiseeId: string, platform: Platform) => {
+    const key = `${franchiseeId}_${platform}`;
+    const cell = uploadCells[key];
+    if (!cell?.splits?.length || !cell.file) return;
+
+    const franchisee = franchisees.find((f) => f.id === franchiseeId);
+    if (!franchisee) return;
+
+    setUploadCells((prev) => ({ ...prev, [key]: { ...prev[key], state: 'saving' } }));
+
+    try {
+      const brand = platform === 'slerp' ? 'Wing Shack' : franchisee.brands?.[0] || 'Wing Shack';
+      // Store the file once under a multi-week path so it's accessible from any week view
+      const filePath = `reports/${franchiseeId}/multi/${cell.file.name}`;
+      await supabase.storage.from('invoicing').upload(filePath, cell.file, { upsert: true });
+
+      for (const split of cell.splits) {
+        // Delete any existing report for this week/platform combo before inserting
+        await supabase
+          .from('weekly_reports')
+          .delete()
+          .eq('franchisee_id', franchiseeId)
+          .eq('week_start_date', split.week_start_date)
+          .eq('week_end_date', split.week_end_date)
+          .eq('platform', platform);
+
+        if (split.gross_revenue > 0) {
+          const { error } = await supabase.from('weekly_reports').insert({
+            franchisee_id:        franchiseeId,
+            brand,
+            platform,
+            week_start_date:      split.week_start_date,
+            week_end_date:        split.week_end_date,
+            gross_revenue:        Math.round(split.gross_revenue * 100) / 100,
+            platform_payout:      split.platform_payout != null
+              ? Math.round(split.platform_payout * 100) / 100
+              : null,
+            financial_breakdown:  split.financial_breakdown ?? null,
+            file_path:            filePath,
+            file_type:            'csv',
+          });
+          if (error) throw error;
+        }
+      }
+
+      setUploadCells((prev) => ({ ...prev, [key]: { state: 'idle' } }));
+      await fetchWeekData();
+    } catch (err) {
+      setUploadCells((prev) => ({
+        ...prev,
+        [key]: { state: 'idle', error: err instanceof Error ? err.message : 'Save failed' },
+      }));
+    }
   };
 
   const clearPlatformReport = async (franchiseeId: string, platform: Platform) => {
@@ -657,6 +733,7 @@ export default function WeeklyHubPage() {
                         savingManual={!!savingManual[`${f.id}_deliveroo`]}
                         onUpload={() => triggerFileUpload(f.id, 'deliveroo')}
                         onConfirm={() => confirmUpload(f.id, 'deliveroo')}
+                        onConfirmMultiWeek={() => confirmMultiWeekUpload(f.id, 'deliveroo')}
                         onCancel={() => cancelUpload(f.id, 'deliveroo')}
                         onToggleManual={() =>
                           setManualModes((prev) => ({
@@ -688,6 +765,7 @@ export default function WeeklyHubPage() {
                         savingManual={!!savingManual[`${f.id}_ubereats`]}
                         onUpload={() => triggerFileUpload(f.id, 'ubereats')}
                         onConfirm={() => confirmUpload(f.id, 'ubereats')}
+                        onConfirmMultiWeek={() => confirmMultiWeekUpload(f.id, 'ubereats')}
                         onCancel={() => cancelUpload(f.id, 'ubereats')}
                         onToggleManual={() =>
                           setManualModes((prev) => ({
@@ -719,6 +797,7 @@ export default function WeeklyHubPage() {
                         savingManual={!!savingManual[`${f.id}_justeat`]}
                         onUpload={() => triggerFileUpload(f.id, 'justeat')}
                         onConfirm={() => confirmUpload(f.id, 'justeat')}
+                        onConfirmMultiWeek={() => confirmMultiWeekUpload(f.id, 'justeat')}
                         onCancel={() => cancelUpload(f.id, 'justeat')}
                         onToggleManual={() =>
                           setManualModes((prev) => ({
@@ -752,6 +831,7 @@ export default function WeeklyHubPage() {
                             savingManual={!!savingManual[`${f.id}_slerp`]}
                             onUpload={() => triggerFileUpload(f.id, 'slerp')}
                             onConfirm={() => confirmUpload(f.id, 'slerp')}
+                            onConfirmMultiWeek={() => confirmMultiWeekUpload(f.id, 'slerp')}
                             onCancel={() => cancelUpload(f.id, 'slerp')}
                             onToggleManual={() =>
                               setManualModes((prev) => ({
@@ -904,6 +984,7 @@ function PlatformCell({
   savingManual,
   onUpload,
   onConfirm,
+  onConfirmMultiWeek,
   onCancel,
   onToggleManual,
   onManualChange,
@@ -921,6 +1002,7 @@ function PlatformCell({
   savingManual: boolean;
   onUpload: () => void;
   onConfirm: () => void;
+  onConfirmMultiWeek: () => void;
   onCancel: () => void;
   onToggleManual: () => void;
   onManualChange: (v: string) => void;
@@ -940,7 +1022,49 @@ function PlatformCell({
     );
   }
 
-  // File parsed, awaiting confirmation
+  // Multi-week file — show per-week breakdown and bulk save button
+  if (uploadState === 'ready' && uploadCell?.splits && uploadCell.splits.length > 1) {
+    const fmt = (s: string) => {
+      const [y, m, d] = s.split('-');
+      return `${d}/${m}`;
+    };
+    return (
+      <div className="flex flex-col gap-1 min-w-[130px]">
+        <p className="text-[10px] font-semibold text-primary text-center">
+          {uploadCell.splits.length} weeks detected
+        </p>
+        <div className="flex flex-col gap-0.5">
+          {uploadCell.splits.map((sp) => (
+            <div key={sp.payout_date} className="flex items-center justify-between gap-1 text-[10px] text-slate-600 dark:text-neutral-400">
+              <span className="whitespace-nowrap">{fmt(sp.week_start_date)}–{fmt(sp.week_end_date)}</span>
+              <span className="font-medium text-slate-800 dark:text-neutral-200">{formatCurrency(sp.gross_revenue)}</span>
+              {sp.platform_payout != null && (
+                <span className="text-slate-400">/ {formatCurrency(sp.platform_payout)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-1 mt-0.5">
+          <button
+            type="button"
+            onClick={onConfirmMultiWeek}
+            className="rounded bg-green-100 dark:bg-green-900/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-200"
+          >
+            Save all
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded bg-slate-100 dark:bg-neutral-800 px-2 py-0.5 text-xs text-slate-500 hover:bg-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Single-week file parsed, awaiting confirmation
   if (uploadState === 'ready' && uploadCell?.amount != null) {
     return (
       <div className="flex flex-col items-center gap-1">

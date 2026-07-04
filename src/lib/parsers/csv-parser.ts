@@ -1,5 +1,5 @@
 import Papa from 'papaparse';
-import { Platform, PlatformFinancialBreakdown } from '@/lib/types';
+import { Platform, PlatformFinancialBreakdown, WeeklyCSVSplit } from '@/lib/types';
 import { getWeekRangeFromDate, parseFlexibleDate } from '@/lib/utils';
 
 // Common column names that indicate gross revenue across platforms
@@ -34,6 +34,11 @@ export interface CSVParseResult {
   platform_payout?: number;
   /** Full financial breakdown — populated for Uber Eats CSV. */
   financial_breakdown?: PlatformFinancialBreakdown;
+  /**
+   * Per-week splits when the file spans multiple payout dates (e.g. a monthly Uber Eats CSV).
+   * Only populated when > 1 distinct payout week is detected.
+   */
+  weekly_splits?: WeeklyCSVSplit[];
   /** @deprecated Legacy fields — kept for backwards compatibility. */
   platform_commission?: number;
   delivery_fee?: number;
@@ -140,6 +145,25 @@ function sumCol(rows: Record<string, unknown>[], col: string | undefined): numbe
   return sum;
 }
 
+/**
+ * Convert an Uber Eats payout date (DD/MM/YYYY) to the order week it covers.
+ * Uber pays weekly: payout on Monday N covers orders from Monday N-7 to Sunday N-1.
+ */
+function payoutDateToWeekRange(payoutDateStr: string): { week_start_date: string; week_end_date: string } | null {
+  const parts = payoutDateStr.split('/');
+  if (parts.length !== 3) return null;
+  const [d, m, y] = parts.map(Number);
+  if (!d || !m || !y) return null;
+  const payout = new Date(y, m - 1, d);
+  if (isNaN(payout.getTime())) return null;
+  const weekStart = new Date(payout);
+  weekStart.setDate(payout.getDate() - 7);
+  const weekEnd = new Date(payout);
+  weekEnd.setDate(payout.getDate() - 1);
+  const fmt = (dt: Date) => dt.toISOString().slice(0, 10);
+  return { week_start_date: fmt(weekStart), week_end_date: fmt(weekEnd) };
+}
+
 export function parseCSV(
   csvText: string,
   platform: Platform
@@ -165,60 +189,56 @@ export function parseCSV(
   if (platform === 'ubereats') {
     const headerMap = new Map(headers.map((h) => [h.toLowerCase().trim(), h]));
 
-    const orderIdCol   = findHeader(headerMap, headers, 'order id');
-    const statusCol    = findHeader(headerMap, headers, 'order status');
-    const salesCol     = findHeader(headerMap, headers, 'sales (incl. vat)');
-    const tipsCol      = findHeader(headerMap, headers, 'tips');
-    const offersCol    = findHeader(headerMap, headers, 'offers on items (incl. vat)');
-    const redemFeeCol  = findHeader(headerMap, headers, 'offer redemption fee');
-    const redemVatCol  = findHeader(headerMap, headers, 'vat on offer redemption fee');
-    const marketingCol = findHeader(headerMap, headers, 'marketing adjustment (incl. vat)');
+    const orderIdCol    = findHeader(headerMap, headers, 'order id');
+    const statusCol     = findHeader(headerMap, headers, 'order status');
+    const salesCol      = findHeader(headerMap, headers, 'sales (incl. vat)');
+    const offersCol     = findHeader(headerMap, headers, 'offers on items (incl. vat)');
+    const redemFeeCol   = findHeader(headerMap, headers, 'offer redemption fee');
+    const redemVatCol   = findHeader(headerMap, headers, 'vat on offer redemption fee');
+    const marketingCol  = findHeader(headerMap, headers, 'marketing adjustment (incl. vat)');
     const commissionCol = findHeader(headerMap, headers, 'marketplace fee after promotion (incl. vat)')
       ?? findHeader(headerMap, headers, 'marketplace fee after discount (incl. vat)')
       ?? findHeader(headerMap, headers, 'marketplace fee (incl. vat)');
-    const adjustCol    = findHeader(headerMap, headers, 'order error adjustments (incl. vat)')
+    const adjustCol     = findHeader(headerMap, headers, 'order error adjustments (incl. vat)')
       ?? findHeader(headerMap, headers, 'price adjustments (incl. vat)');
-    const payoutCol    = findHeader(headerMap, headers, 'total payout')
+    const payoutCol     = findHeader(headerMap, headers, 'total payout')
       ?? findHeader(headerMap, headers, 'net payout');
-    const otherPayCol  = findHeader(headerMap, headers, 'other payments (incl. vat)');
+    const otherPayCol   = findHeader(headerMap, headers, 'other payments (incl. vat)');
+    const payoutDateCol = findHeader(headerMap, headers, 'payout date');
 
-    // Filter to completed order-level rows (blank Order ID = item sub-row)
-    const orderRows = orderIdCol
-      ? rows.filter((r) => {
-          const id = String(r[orderIdCol] ?? '').trim();
-          if (!id) return false;
-          if (statusCol) {
-            const st = String(r[statusCol] ?? '').trim().toLowerCase();
-            return st === 'completed';
-          }
-          return true;
-        })
-      : rows;
+    /** Returns true for completed order-level rows (not item sub-rows). */
+    const isCompletedOrder = (r: Record<string, unknown>) => {
+      const id = String(r[orderIdCol ?? ''] ?? '').trim();
+      if (!id) return false;
+      if (statusCol) return String(r[statusCol] ?? '').trim().toLowerCase() === 'completed';
+      return true;
+    };
 
-    if (salesCol && orderRows.length > 0) {
-      const salesSum = sumCol(orderRows, salesCol);
-      const tipsSum  = sumCol(orderRows, tipsCol);
-
-      // Offer costs: Uber Eats "Earnings" line inflates revenue by the offer amount —
-      // the customer never paid that portion. Deduct here so gross_revenue = what customers actually paid.
+    /**
+     * Compute gross_revenue, payout, and financial_breakdown for a subset of rows.
+     * allRows = every row for this period (order + adjustment rows).
+     * orderRows = completed order-level rows only (for revenue sums).
+     *
+     * Tips and delivery fee are excluded from the franchise fee base — they belong
+     * to the franchisee (own-delivery sites keep both).
+     */
+    const computeGroup = (allRows: typeof rows, orderRows: typeof rows) => {
+      const salesSum   = sumCol(orderRows, salesCol);
       const offersSum  = sumCol(orderRows, offersCol);   // negative
       const redemFee   = sumCol(orderRows, redemFeeCol); // negative
       const redemVat   = sumCol(orderRows, redemVatCol); // negative
       const htOffers   = Math.abs(offersSum) + Math.abs(redemFee) + Math.abs(redemVat);
-
-      // gross_revenue = actual customer spend (net of offer costs)
-      const grossRevenue = Math.round((salesSum + tipsSum - htOffers) * 100) / 100;
+      const grossRevenue = Math.round((salesSum - htOffers) * 100) / 100;
 
       const commission  = Math.round(Math.abs(sumCol(orderRows, commissionCol)) * 100) / 100;
       const adSpend     = Math.round(Math.abs(sumCol(orderRows, marketingCol)) * 100) / 100;
       const adjustments = Math.round(Math.abs(sumCol(orderRows, adjustCol)) * 100) / 100;
-      // Sum payout across ALL rows so period-level adjustment rows (ad spend, VAT
-      // rounding, other fees) are included. Uber sometimes puts a value only in
-      // "Other payments (incl. VAT)" and leaves "Total payout" blank for the same row —
-      // use otherPayCol as fallback when payoutCol is zero to capture those amounts
-      // without double-counting rows that populate both columns.
-      const payoutSum = rows.reduce((acc, row) => {
-        const main = parseNumeric(row[payoutCol ?? ''] ?? 0);
+
+      // Sum payout across ALL rows so period-level adjustments (ad spend, VAT
+      // rounding, other fees) are included. Use otherPayCol as fallback when
+      // payoutCol is zero to avoid double-counting rows that have both columns.
+      const payoutSum = allRows.reduce((acc, row) => {
+        const main  = parseNumeric(row[payoutCol ?? ''] ?? 0);
         const other = otherPayCol ? parseNumeric(row[otherPayCol] ?? 0) : 0;
         return acc + (main !== 0 ? main : other);
       }, 0);
@@ -232,19 +252,60 @@ export function parseCSV(
         adjustments:         adjustments  || undefined,
       };
 
+      return { grossRevenue, payout, financial_breakdown, orderCount: orderRows.length };
+    };
+
+    const allOrderRows = orderIdCol ? rows.filter(isCompletedOrder) : rows;
+
+    if (salesCol && allOrderRows.length > 0) {
+      const overall = computeGroup(rows, allOrderRows);
+
+      // ── Multi-week split by payout date ────────────────────────────────────
+      // Uber monthly CSVs span multiple payout dates. When > 1 distinct payout
+      // date is found, build a WeeklyCSVSplit for each so the UI can backfill
+      // weekly_report records for every covered week in one upload.
+      let weekly_splits: WeeklyCSVSplit[] | undefined;
+      if (payoutDateCol) {
+        const payoutDates = Array.from(
+          new Set(rows.map((r) => String(r[payoutDateCol] ?? '').trim()).filter(Boolean))
+        ).sort();
+
+        if (payoutDates.length > 1) {
+          weekly_splits = [];
+          for (const pd of payoutDates) {
+            const splitAll    = rows.filter((r) => String(r[payoutDateCol] ?? '').trim() === pd);
+            const splitOrders = splitAll.filter(isCompletedOrder);
+            const wr = payoutDateToWeekRange(pd);
+            if (!wr) continue;
+            const g = computeGroup(splitAll, splitOrders);
+            weekly_splits.push({
+              week_start_date:    wr.week_start_date,
+              week_end_date:      wr.week_end_date,
+              payout_date:        pd,
+              gross_revenue:      g.grossRevenue,
+              platform_payout:    g.payout || undefined,
+              financial_breakdown: g.financial_breakdown,
+              order_count:        g.orderCount,
+            });
+          }
+          if (weekly_splits.length <= 1) weekly_splits = undefined;
+        }
+      }
+
       return {
-        gross_revenue:   grossRevenue,
-        platform_payout: payout || undefined,
-        financial_breakdown,
-        confidence:      'high',
-        matched_column:  'Sales (incl. VAT) + Tips − offer costs (order rows only)',
-        row_count:       orderRows.length,
+        gross_revenue:    overall.grossRevenue,
+        platform_payout:  overall.payout || undefined,
+        financial_breakdown: overall.financial_breakdown,
+        confidence:       'high',
+        matched_column:   'Sales (incl. VAT) − offer costs (order rows only)',
+        row_count:        allOrderRows.length,
+        ...(weekly_splits && { weekly_splits }),
         ...(weekFromFile && { week_start_date: weekFromFile.week_start_date, week_end_date: weekFromFile.week_end_date }),
       };
     }
 
     // Fallback: summary CSV without Order ID column — use old pattern matching
-    const net_payout = sumColByPatterns(headers, rows, ['total payout', 'net payout', 'amount paid', 'payout']);
+    const net_payout  = sumColByPatterns(headers, rows, ['total payout', 'net payout', 'amount paid', 'payout']);
     const legacyGross = sumColByPatterns(headers, rows, ['sales (incl. vat)']);
     return {
       gross_revenue:   legacyGross ?? 0,

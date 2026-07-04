@@ -81,9 +81,26 @@ src/app/
 - `src/app/api/generate-invoice/` — PDF invoice renderer (server-side only)
 - `src/app/(dashboard)/weekly/page.tsx` — Weekly Hub (primary admin workflow)
 - `src/components/InvoicePDF.tsx` — PDF template (includes TZ gross revenue + fee breakdown)
-- `src/lib/parsers/csv-parser.ts` — CSV parser with financial breakdown fields
+- `src/lib/parsers/csv-parser.ts` — CSV parser with financial breakdown fields + multi-week Uber split
 - `src/lib/parsers/pdf-parser.ts` — PDF parser with financial breakdown fields
 - `src/components/FranchiseeForm.tsx` — franchisee create/edit (includes bank details fields)
+
+### Deliveroo PDF Parser — key rules
+
+- **Multi-site accounts**: Deliveroo payment statements for accounts covering multiple brands (e.g. Wing Shack + Fireaway on one Annkyra account) show a combined "Total payable to ANNKYRA LIMITED" figure. The parser extracts `platform_payout` from the **"Total payable to site"** line in the Site Breakdown section (HT/Wing Shack brand only) — not the combined total. See `src/lib/parsers/pdf-parser.ts`.
+
+### Just Eat HTML Parser — key rules
+
+- The parsed result field is `platform_payout` (not `net_payout`). The weekly hub reads `data.platform_payout` — any rename must stay in sync.
+- Commission regex targets the actual commission amount at the end of lines like `"Commission on GOV of £337.60 ... £47.26"` — do not change it to capture the GOV figure. See `src/lib/parsers/html-parser.ts`.
+
+### Uber Eats CSV Parser — key rules
+
+- **gross_revenue = `Sales (incl. VAT)` − offers − offer redemption fees** (order rows only, completed status)
+- **Tips are excluded** from gross_revenue — they belong to the franchisee (own-delivery sites keep tips)
+- **Delivery fee is excluded** from gross_revenue — belongs to the franchisee for own-delivery sites
+- **Multi-week detection**: if the CSV has > 1 distinct payout date, the parser returns `weekly_splits[]` instead of a single total. Each split covers one order week: `week_start = payout_date − 7 days`, `week_end = payout_date − 1 day`.
+- Payout is summed across ALL rows (including non-order adjustment rows like ad spend) using `Total payout` column, with `Other payments (incl. VAT)` as fallback for rows where payout column is blank.
 
 ### Dashboard Metrics
 
@@ -162,6 +179,7 @@ INVOICE_COMPANY_NAME=
 - PDF generation is server-side only (`@react-pdf/renderer` — never import in client components)
 - Revenue values are stored as floats (not minor units) — verify in migrations before arithmetic
 - Weekly Hub (`/weekly`) is the primary admin workflow — new invoice-related features should fit here
+- Multi-week Uber CSVs (monthly downloads) are handled automatically: the parser splits by payout date and the UI shows a "Save all" button that backfills each week as a separate `weekly_report` row. The file is stored once under `reports/{franchiseeId}/multi/`. Invoices are NOT auto-generated on multi-week save — admin navigates to each week to generate.
 
 ## Commands
 
@@ -172,4 +190,4 @@ npm run lint     # ESLint
 ```
 
 ---
-*Last updated: 2026-07-04*
+*Last updated: 2026-07-05 (session 2)*
