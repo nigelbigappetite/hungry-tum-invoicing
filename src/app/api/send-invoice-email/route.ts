@@ -120,7 +120,10 @@ export async function POST(request: NextRequest) {
     }
 
     const resendKey = process.env.RESEND_API_KEY;
-    const fromEmail = process.env.INVOICE_EMAIL_FROM || 'Hungry Tum <onboarding@resend.dev>';
+    const fromEmail =
+      process.env.INVOICE_EMAIL_FROM ||
+      process.env.BACS_EMAIL_FROM ||
+      'Hungry Tum <invoices@hungrytum.co>';
     if (!resendKey) {
       return NextResponse.json(
         { error: 'Email not configured. Add RESEND_API_KEY to .env.local.' },
