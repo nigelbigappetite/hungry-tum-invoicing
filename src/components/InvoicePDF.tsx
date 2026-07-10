@@ -7,7 +7,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer';
 import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, InvoiceLineItem, Platform, PlatformFinancialBreakdown } from '@/lib/types';
-import { getPlatformFeeRate } from '@/lib/utils';
+import { getPlatformFeeRate, isTzPeriPeriInvoice } from '@/lib/utils';
 
 // Use built-in Helvetica so PDF generation works in Node (no font URL fetch)
 const styles = StyleSheet.create({
@@ -254,21 +254,21 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   footer: {
-    marginTop: 40,
-    paddingTop: 20,
+    marginTop: 10,
+    paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#e2e8f0',
   },
   footerTitle: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: 600,
     color: '#0f172a',
-    marginBottom: 8,
+    marginBottom: 3,
   },
   footerText: {
     fontSize: 9,
     color: '#64748b',
-    lineHeight: 1.5,
+    lineHeight: 1.3,
   },
   pageFooter: {
     position: 'absolute',
@@ -331,23 +331,8 @@ function formatPercentageLabel(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
 }
 
-function isTzPeriPeriInvoice(franchisee: Franchisee): boolean {
-  const text = [
-    franchisee.name,
-    franchisee.location,
-    franchisee.email,
-    franchisee.business_address,
-    franchisee.site_address,
-    ...(Array.isArray(franchisee.brands) ? franchisee.brands : []),
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
 
-  return /\bt\s*z\b|\btz\b|tz group/.test(text) || text.includes('peri');
-}
-
-export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, logoPath, businessAddressLines }: InvoicePDFProps) {
+export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
   const payThem = franchisee.payment_direction === 'pay_them';
   const showLogo = Boolean(logoPath?.trim());
   const hidePlatformCommission = isTzPeriPeriInvoice(franchisee);
@@ -731,27 +716,21 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             <>
               <Text style={styles.footerTitle}>Payment</Text>
               <Text style={styles.footerText}>
-                Remaining funds will be transferred to {franchisee.name}.
+                {amountWePay != null
+                  ? `We will transfer ${formatGBP(amountWePay)} to ${franchisee.name}.`
+                  : `Remaining funds will be transferred to ${franchisee.name}.`}
+                {`  ·  Ref: ${invoice.invoice_number}`}
               </Text>
               {(franchisee.bank_account_name || franchisee.bank_name || franchisee.sort_code || franchisee.account_number) && (
-                <>
-                  {franchisee.bank_account_name && (
-                    <Text style={styles.footerText}>Account name: {franchisee.bank_account_name}</Text>
-                  )}
-                  {franchisee.bank_name && (
-                    <Text style={styles.footerText}>Bank: {franchisee.bank_name}</Text>
-                  )}
-                  {franchisee.sort_code && (
-                    <Text style={styles.footerText}>Sort code: {franchisee.sort_code}</Text>
-                  )}
-                  {franchisee.account_number && (
-                    <Text style={styles.footerText}>Account number: {franchisee.account_number}</Text>
-                  )}
-                </>
+                <Text style={styles.footerText}>
+                  {[
+                    franchisee.bank_account_name ? `Account name: ${franchisee.bank_account_name}` : null,
+                    franchisee.bank_name ? `Bank: ${franchisee.bank_name}` : null,
+                    franchisee.sort_code ? `Sort code: ${franchisee.sort_code}` : null,
+                    franchisee.account_number ? `Account number: ${franchisee.account_number}` : null,
+                  ].filter(Boolean).join('  ·  ')}
+                </Text>
               )}
-              <Text style={styles.footerText}>
-                Reference: {invoice.invoice_number}
-              </Text>
             </>
           ) : showMaidstoneWaiverFooter ? (
             <>

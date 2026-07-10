@@ -2,6 +2,28 @@ import { format, startOfWeek, endOfWeek, parseISO, addDays } from 'date-fns';
 import type { Franchisee } from '@/lib/types';
 import type { Platform } from '@/lib/types';
 
+/**
+ * Returns true for TZ Peri Peri franchisees.
+ * These are the only pay_them franchise where HT holds Deliveroo funds directly
+ * and pays them Deliveroo gross minus all platform fees.
+ * All other pay_them franchisees receive payment for all 3rd party platforms directly.
+ */
+export function isTzPeriPeriInvoice(franchisee: Franchisee): boolean {
+  const text = [
+    franchisee.name,
+    franchisee.location,
+    franchisee.email,
+    franchisee.business_address,
+    franchisee.site_address,
+    ...(Array.isArray(franchisee.brands) ? franchisee.brands : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return /\bt\s*z\b|\btz\b|tz group/.test(text) || text.includes('peri');
+}
+
 /** Fee % for a platform (percentage_per_platform uses deliveroo/ubereats/justeat %; otherwise percentage_rate). */
 export function getPlatformFeeRate(f: Franchisee | null, platform: Platform): number {
   if (!f) return 6;

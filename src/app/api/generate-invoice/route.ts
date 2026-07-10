@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { renderToBuffer } from '@react-pdf/renderer';
 import { createClient } from '@/lib/supabase/server';
 import InvoicePDF from '@/components/InvoicePDF';
-import { formatWeekRange } from '@/lib/utils';
+import { formatWeekRange, isTzPeriPeriInvoice } from '@/lib/utils';
 import { createElement } from 'react';
 import { isExtendedInvoiceRange } from '@/lib/monthly-invoice-revenue';
 
@@ -97,14 +97,31 @@ export async function POST(request: NextRequest) {
 
     const payThem = franchisee.payment_direction === 'pay_them';
 
-    // For pay_them: amount we pay = Deliveroo gross − our fees (D+U+J)
+    // For pay_them: calculate what HT transfers to the franchisee.
+    // TZ Peri Peri (exception): HT holds Deliveroo funds and pays Deliveroo gross − all platform HT fees.
+    // All other pay_them franchisees: HT pays for all 3rd party platforms directly —
+    //   amount = total platform payout across D+U+J (or gross if payout not available) − HT fee.
     const reportsList = aggregatorReports || [];
-    const deliverooGross = reportsList
-      .filter((r: { platform: string }) => r.platform === 'deliveroo')
-      .reduce((s: number, r: { gross_revenue?: number }) => s + Number(r.gross_revenue ?? 0), 0);
-    const amountWePay = payThem
-      ? Math.round((deliverooGross - Number(invoice.fee_amount ?? 0)) * 100) / 100
-      : undefined;
+    let amountWePay: number | undefined;
+    if (payThem) {
+      if (isTzPeriPeriInvoice(franchisee)) {
+        const deliverooGross = reportsList
+          .filter((r: { platform: string }) => r.platform === 'deliveroo')
+          .reduce((s: number, r: { gross_revenue?: number }) => s + Number(r.gross_revenue ?? 0), 0);
+        amountWePay = Math.round((deliverooGross - Number(invoice.fee_amount ?? 0)) * 100) / 100;
+      } else {
+        const totalPayout = reportsList.reduce(
+          (s: number, r: { platform_payout?: number | null }) => s + Number(r.platform_payout ?? 0),
+          0
+        );
+        const totalGross = reportsList.reduce(
+          (s: number, r: { gross_revenue?: number }) => s + Number(r.gross_revenue ?? 0),
+          0
+        );
+        const basis = totalPayout > 0 ? totalPayout : totalGross;
+        amountWePay = Math.round((basis - Number(invoice.fee_amount ?? 0)) * 100) / 100;
+      }
+    }
 
     // Logo: same folder as test PDFs – project root / public / Hungry Tum Logo.png
     const publicDir = path.resolve(process.cwd(), 'public');
