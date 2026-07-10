@@ -84,6 +84,7 @@ src/app/
 - `src/lib/parsers/csv-parser.ts` — CSV parser with financial breakdown fields + multi-week Uber split
 - `src/lib/parsers/pdf-parser.ts` — PDF parser with financial breakdown fields
 - `src/components/FranchiseeForm.tsx` — franchisee create/edit (includes bank details fields)
+- `src/lib/utils.ts` — shared utilities including `isTzPeriPeriInvoice()`, `getPlatformFeeRate()`, date helpers
 
 ### Deliveroo PDF Parser — key rules
 
@@ -101,6 +102,21 @@ src/app/
 - **Delivery fee is excluded** from gross_revenue — belongs to the franchisee for own-delivery sites
 - **Multi-week detection**: if the CSV has > 1 distinct payout date, the parser returns `weekly_splits[]` instead of a single total. Each split covers one order week: `week_start = payout_date − 7 days`, `week_end = payout_date − 1 day`.
 - Payout is summed across ALL rows (including non-order adjustment rows like ad spend) using `Total payout` column, with `Other payments (incl. VAT)` as fallback for rows where payout column is blank.
+
+### pay_them Payout Logic
+
+Franchisees with `payment_direction = 'pay_them'` have two distinct models:
+
+**TZ Peri Peri (exception)** — detected via `isTzPeriPeriInvoice()` in `src/lib/utils.ts`:
+- HT holds Deliveroo funds directly and pays TZ: `Deliveroo gross − total HT fees (all platforms)`
+- Invoice renders as fee-only (no platform commission breakdown shown)
+
+**All other pay_them franchisees (standard model)**:
+- HT pays them for all 3rd party platforms directly
+- `amountWePay = total platform payout across D+U+JE − HT fee` (falls back to gross if payout data unavailable)
+- Invoice shows full per-platform breakdown with "Your payout this week" in the body and explicit transfer amount in the footer
+
+`isTzPeriPeriInvoice()` is exported from `src/lib/utils.ts` and used by both `generate-invoice/route.ts` and `InvoicePDF.tsx`. Do not duplicate it locally.
 
 ### Dashboard Metrics
 
@@ -189,5 +205,15 @@ npm run build    # Production build
 npm run lint     # ESLint
 ```
 
+### Invoice PDF Footer Layout
+
+The `pay_them` footer is intentionally compact to keep invoices to a single page:
+- `marginTop: 10`, `paddingTop: 8` (previously 40/20)
+- Transfer amount line: `"We will transfer £X to [franchisee name].  ·  Ref: INV-XXX"` — all on one line
+- Bank details collapsed onto a single line joined with `  ·  ` separators (account name · bank · sort code · account number)
+- Falls back to `"Remaining funds will be transferred to [name]."` if `amountWePay` is not available
+
+Do not expand the footer back to multi-line — the single-page constraint is intentional.
+
 ---
-*Last updated: 2026-07-05 (session 2)*
+*Last updated: 2026-07-10 (session 4)*
