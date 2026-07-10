@@ -712,7 +712,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
 
         {/* Payment */}
         <View style={styles.footer}>
-          {payThem ? (
+          {payThem && !isFeeOnlyInvoice ? (
             <>
               <Text style={styles.footerTitle}>Payment</Text>
               <Text style={styles.footerText}>
