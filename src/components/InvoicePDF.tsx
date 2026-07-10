@@ -778,11 +778,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                     Reference: {invoice.invoice_number}
                   </Text>
                 </>
-              ) : (
-                <Text style={styles.footerText}>
-                  Payment is handled through the agreed payment method.
-                </Text>
-              )}
+              ) : null}
               {!isCatchUpInvoice && (
                 <Text style={styles.footerText}>
                   Reference: {invoice.invoice_number}
