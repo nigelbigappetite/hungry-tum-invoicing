@@ -622,7 +622,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   )}
 
                   {/* Platform payout subtotal */}
-                  {block.platformPayout > 0 && !(hidePlatformCommission && block.platform === 'deliveroo') && (
+                  {block.platformPayout > 0 && !isFeeOnlyInvoice && (
                     <View style={styles.breakdownSubtotalRow}>
                       <Text style={styles.breakdownSubtotalLabel}>Platform payout received</Text>
                       <Text style={styles.breakdownSubtotalAmount}>{formatGBP(block.platformPayout)}</Text>
