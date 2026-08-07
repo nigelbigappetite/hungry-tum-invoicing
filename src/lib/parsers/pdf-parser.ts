@@ -25,6 +25,12 @@ export interface PDFParseResult {
   order_count?: number;
 }
 
+export interface PDFParseOptions {
+  deliverooLocation?: string;
+  deliverooBrands?: string[];
+  franchiseeName?: string;
+}
+
 /**
  * Try to extract a single date from PDF text (e.g. "week ending 14 Jan 2024", "period ending 01/02/2024").
  * Returns the containing Monday–Sunday week.
@@ -77,14 +83,82 @@ export function extractWeekFromFilename(fileName: string): { week_start_date: st
  * Used to sum only these brands' Total Order Value and exclude others (e.g. Chitti Dosa).
  * Order: Eggs N Stuff, Smash Bun (EC), Wing Shack (Co - Bethnal Green (EC) optional; PDFs often abbreviate).
  */
-const DELIVEROO_HUNGRY_TUM_BRAND_PATTERNS: RegExp[] = [
-  /Eggs\s+[nN]\s+Stuff/i,
-  /Smash\s+Bun\s*\(\s*EC\s*\)|SMSH\s+BN/i,
-  /Wing\s+Shack(?:\s+Co\s*[-–]\s*Bethnal\s+Green\s*\(\s*EC\s*\))?/i,
-];
+const DELIVEROO_BRANDS = [
+  { key: 'Eggs n Stuff', pattern: /Eggs\s+[nN]\s+Stuff/i },
+  { key: 'SMSH BN', pattern: /Smash\s+Bun\s*\(\s*EC\s*\)|SMSH\s+BN/i },
+  { key: 'Wing Shack', pattern: /Wing\s+Shack(?:\s+Co)?/i },
+] as const;
 
-/** Hungry Tum brand keys for invoice breakdown (same order as DELIVEROO_HUNGRY_TUM_BRAND_PATTERNS). */
-const DELIVEROO_BRAND_KEYS = ['Eggs n Stuff', 'SMSH BN', 'Wing Shack'] as const;
+const DELIVEROO_HUNGRY_TUM_BRAND_PATTERNS: RegExp[] = DELIVEROO_BRANDS.map((b) => b.pattern);
+
+/** Hungry Tum brand keys for invoice breakdown. */
+const DELIVEROO_BRAND_KEYS = DELIVEROO_BRANDS.map((b) => b.key);
+
+interface DeliverooSiteRow {
+  siteName: string;
+  brandKey: string;
+  totalOrderValue: number;
+  netCharges: number;
+  payout: number;
+}
+
+function parseGBPAmount(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const cleaned = value.replace(/,/g, '').trim();
+  const amount = parseFloat(cleaned.replace(/^-/, ''));
+  if (!Number.isFinite(amount)) return undefined;
+  return cleaned.startsWith('-') ? -amount : amount;
+}
+
+function normalizeMatchText(value: string | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function identifyDeliverooBrand(siteName: string): string | null {
+  const brand = DELIVEROO_BRANDS.find((b) => b.pattern.test(siteName));
+  return brand?.key ?? null;
+}
+
+function extractDeliverooSiteRows(text: string): DeliverooSiteRow[] {
+  const rows: DeliverooSiteRow[] = [];
+  const siteRowRe = /\b((?:Eggs\s+n\s+Stuff|SMSH\s+BN|Smash\s+Bun(?:\s*\(\s*EC\s*\))?|Wing\s+Shack\s+Co)\s*[-–]\s*[^£\n]+?)\s+Total\s+Order\s+Value\s+[^£]*£\s*([\d,]+\.?\d*)\s+Deliveroo\s+net\s+charges\s+£\s*(-?[\d,]+\.?\d*)\s+£\s*(-?[\d,]+\.?\d*)\s+£\s*(-?[\d,]+\.?\d*)\s+Total\s+payable\s+to\s+site\s+[^£]*£\s*([\d,]+\.?\d*)/gi;
+
+  let match: RegExpExecArray | null;
+  while ((match = siteRowRe.exec(text)) !== null) {
+    const siteName = match[1].replace(/\s+/g, ' ').trim();
+    const brandKey = identifyDeliverooBrand(siteName);
+    const totalOrderValue = parseGBPAmount(match[2]);
+    const netCharges = parseGBPAmount(match[5]);
+    const payout = parseGBPAmount(match[6]);
+    if (!brandKey || totalOrderValue == null || netCharges == null || payout == null) continue;
+    rows.push({ siteName, brandKey, totalOrderValue, netCharges, payout });
+  }
+
+  return rows;
+}
+
+function filterDeliverooRowsForContext(rows: DeliverooSiteRow[], options?: PDFParseOptions): DeliverooSiteRow[] {
+  const allowedBrands = new Set((options?.deliverooBrands ?? []).map(normalizeMatchText).filter(Boolean));
+  const location = normalizeMatchText(options?.deliverooLocation);
+  const franchiseeName = normalizeMatchText(options?.franchiseeName);
+
+  let candidates = rows;
+  if (allowedBrands.size > 0) {
+    candidates = candidates.filter((row) => allowedBrands.has(normalizeMatchText(row.brandKey)));
+  }
+
+  if (location) {
+    const locationMatches = candidates.filter((row) => normalizeMatchText(row.siteName).includes(location));
+    if (locationMatches.length > 0) return locationMatches;
+  }
+
+  if (franchiseeName) {
+    const nameMatches = candidates.filter((row) => normalizeMatchText(row.siteName).includes(franchiseeName));
+    if (nameMatches.length > 0) return nameMatches;
+  }
+
+  return candidates;
+}
 
 /**
  * Sum Total Order Value for Hungry Tum brands and optionally return per-brand breakdown.
@@ -93,6 +167,19 @@ const DELIVEROO_BRAND_KEYS = ['Eggs n Stuff', 'SMSH BN', 'Wing Shack'] as const;
 function sumHungryTumTotalOrderValueInText(
   textSlice: string
 ): { sum: number; foundAny: boolean; brand_breakdown: Record<string, number> } {
+  const siteRows = extractDeliverooSiteRows(textSlice);
+  if (siteRows.length > 0) {
+    const brand_breakdown = Object.fromEntries(DELIVEROO_BRAND_KEYS.map((key) => [key, 0]));
+    for (const row of siteRows) {
+      brand_breakdown[row.brandKey] = Math.round(((brand_breakdown[row.brandKey] ?? 0) + row.totalOrderValue) * 100) / 100;
+    }
+    return {
+      sum: Math.round(siteRows.reduce((sum, row) => sum + row.totalOrderValue, 0) * 100) / 100,
+      foundAny: true,
+      brand_breakdown,
+    };
+  }
+
   let sum = 0;
   let foundAny = false;
   const brand_breakdown: Record<string, number> = {};
@@ -105,7 +192,7 @@ function sumHungryTumTotalOrderValueInText(
       `(${brandRe.source})\\s+Total\\s+Order\\s+Value\\s+[^£\\d]*(?:£)?([\\d,]+\\.?\\d*)`,
       'gi'
     );
-    let m = rowRe.exec(textSlice);
+    const m = rowRe.exec(textSlice);
     if (m?.[2]) {
       amount = parseFloat(m[2].replace(/,/g, ''));
       rowFound = true;
@@ -222,7 +309,7 @@ function extractDeliverooFinancials(text: string): Pick<PDFParseResult, 'platfor
  * for Hungry Tum brands only (Eggs N Stuff, Smash Bun (EC), Wing Shack Co - Bethnal Green (EC))
  * and exclude other brands (e.g. Chitti Dosa).
  */
-function extractDeliverooRevenue(text: string): PDFParseResult {
+function extractDeliverooRevenue(text: string, options?: PDFParseOptions): PDFParseResult {
   const rawTextSnippet = text.substring(0, 2000);
   const financials = extractDeliverooFinancials(text);
 
@@ -238,6 +325,45 @@ function extractDeliverooRevenue(text: string): PDFParseResult {
     offer_redemption: htOffers || undefined,
     adjustments: financials.adjustments || undefined,
   });
+
+  const siteRows = extractDeliverooSiteRows(text);
+  if (siteRows.length > 0) {
+    const rowsForContext = filterDeliverooRowsForContext(siteRows, options);
+    const selectedRows = rowsForContext.length > 0 ? rowsForContext : siteRows;
+    const tov = Math.round(selectedRows.reduce((sum, row) => sum + row.totalOrderValue, 0) * 100) / 100;
+    const payout = Math.round(selectedRows.reduce((sum, row) => sum + row.payout, 0) * 100) / 100;
+    const selectedNetCharges = Math.round(selectedRows.reduce((sum, row) => sum + Math.abs(row.netCharges), 0) * 100) / 100;
+    const brand_breakdown = Object.fromEntries(DELIVEROO_BRAND_KEYS.map((key) => [key, 0]));
+    for (const row of selectedRows) {
+      brand_breakdown[row.brandKey] = Math.round(((brand_breakdown[row.brandKey] ?? 0) + row.totalOrderValue) * 100) / 100;
+    }
+    const selectedFinancials = {
+      ...financials,
+      net_payout: payout,
+      // On a future multi-trading-site statement the company-level commission is combined.
+      // Use the selected row's net charges so the invoice does not show another site's deductions.
+      platform_commission: selectedRows.length < siteRows.length ? selectedNetCharges : financials.platform_commission,
+    };
+
+    return {
+      gross_revenue: tov,
+      platform_payout: payout,
+      financial_breakdown: {
+        earnings: tov,
+        platform_commission: selectedFinancials.platform_commission || undefined,
+        ad_spend: selectedFinancials.ad_spend || undefined,
+        offer_redemption: htOffers || undefined,
+        adjustments: selectedFinancials.adjustments || undefined,
+      },
+      confidence: rowsForContext.length > 0 ? 'high' : 'medium',
+      matched_pattern: rowsForContext.length > 0
+        ? `Deliveroo Site Breakdown (${selectedRows.map((row) => row.siteName).join(', ')})`
+        : 'Deliveroo Site Breakdown (all Hungry Tum site rows)',
+      raw_text: rawTextSnippet,
+      deliveroo_brand_breakdown: brand_breakdown,
+      ...selectedFinancials,
+    };
+  }
 
   const wholeDoc = sumHungryTumTotalOrderValueInText(text);
   if (wholeDoc.foundAny) {
@@ -434,7 +560,8 @@ function extractJustEatRevenue(text: string): PDFParseResult {
 
 export function extractRevenueFromText(
   text: string,
-  platform: Platform
+  platform: Platform,
+  options?: PDFParseOptions
 ): PDFParseResult {
   // Deliveroo: use "Period covered" billing period (precise) before falling back to generic patterns
   const weekFromFile = platform === 'deliveroo'
@@ -443,7 +570,7 @@ export function extractRevenueFromText(
   let result: PDFParseResult;
   switch (platform) {
     case 'deliveroo':
-      result = extractDeliverooRevenue(text);
+      result = extractDeliverooRevenue(text, options);
       break;
     case 'ubereats':
       result = extractUberEatsRevenue(text);

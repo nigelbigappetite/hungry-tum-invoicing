@@ -65,6 +65,9 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const platform = formData.get('platform') as Platform | null;
+    const deliverooLocation = formData.get('deliverooLocation');
+    const franchiseeName = formData.get('franchiseeName');
+    const deliverooBrandsRaw = formData.get('deliverooBrands');
 
     if (!file || !platform) {
       return NextResponse.json(
@@ -132,7 +135,13 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const result = extractRevenueFromText(text, platform);
+      const result = extractRevenueFromText(text, platform, {
+        deliverooLocation: typeof deliverooLocation === 'string' ? deliverooLocation : undefined,
+        franchiseeName: typeof franchiseeName === 'string' ? franchiseeName : undefined,
+        deliverooBrands: typeof deliverooBrandsRaw === 'string'
+          ? deliverooBrandsRaw.split(',').map((brand) => brand.trim()).filter(Boolean)
+          : undefined,
+      });
       if (platform === 'deliveroo' && process.env.NODE_ENV === 'development') {
         console.log('[parse-file] Deliveroo PDF:', {
           textLength: text.length,

@@ -279,9 +279,15 @@ export default function WeeklyHubPage() {
 
     setUploadCells((prev) => ({ ...prev, [key]: { state: 'parsing' } }));
 
+    const franchisee = franchisees.find((f) => f.id === franchiseeId);
     const formData = new FormData();
     formData.append('file', file);
     formData.append('platform', platform);
+    if (franchisee) {
+      formData.append('franchiseeName', franchisee.name ?? '');
+      formData.append('deliverooLocation', franchisee.location ?? '');
+      formData.append('deliverooBrands', Array.isArray(franchisee.brands) ? franchisee.brands.join(',') : '');
+    }
 
     try {
       const res = await fetch('/api/parse-file', { method: 'POST', body: formData });
