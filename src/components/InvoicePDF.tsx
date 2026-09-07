@@ -6,7 +6,7 @@ import {
   Image,
   StyleSheet,
 } from '@react-pdf/renderer';
-import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, InvoiceLineItem, Platform, PlatformFinancialBreakdown } from '@/lib/types';
+import { Invoice, WeeklyReport, Franchisee, PLATFORM_LABELS, InvoiceLineItem, Platform, PlatformFinancialBreakdown, OfferReimbursement } from '@/lib/types';
 import { getPlatformFeeRate, isTzPeriPeriInvoice } from '@/lib/utils';
 
 // Use built-in Helvetica so PDF generation works in Node (no font URL fetch)
@@ -205,6 +205,13 @@ const styles = StyleSheet.create({
     color: '#1e293b',
     textAlign: 'right',
   },
+  breakdownDesc: {
+    width: '65%',
+    fontSize: 7,
+    color: '#94a3b8',
+    marginTop: 1,
+    marginBottom: 2,
+  },
   platformDivider: {
     height: 1,
     backgroundColor: '#f1f5f9',
@@ -315,6 +322,10 @@ interface InvoicePDFProps {
   logoPath?: string;
   /** Business address lines (issuer / "From") to show on the invoice. */
   businessAddressLines?: string[];
+  /** Offer reimbursements to display below the platform breakdown table. */
+  offerReimbursements?: OfferReimbursement[];
+  /** When true, renders explanatory sub-text under each line for use in the guide/template PDF only. */
+  showDescriptions?: boolean;
 }
 
 const INVOICE_PLATFORMS = ['deliveroo', 'ubereats', 'justeat', 'slerp'] as const;
@@ -332,7 +343,7 @@ function formatPercentageLabel(value: number): string {
 }
 
 
-export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, amountWePay, logoPath, businessAddressLines }: InvoicePDFProps) {
+export default function InvoicePDF({ invoice, franchisee, reports, slerpReports = [], paymentDetails, amountWePay, logoPath, businessAddressLines, offerReimbursements, showDescriptions = false }: InvoicePDFProps) {
   const payThem = franchisee.payment_direction === 'pay_them';
   const showLogo = Boolean(logoPath?.trim());
   const hidePlatformCommission = isTzPeriPeriInvoice(franchisee);
@@ -366,7 +377,8 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
       const offerRedemption = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.offer_redemption ?? 0), 0) * 100) / 100;
       const adjustments = Math.round(rs.reduce((s, r) => s + Number((r.financial_breakdown as PlatformFinancialBreakdown | null)?.adjustments ?? 0), 0) * 100) / 100;
       const hasBreakdown = commission > 0 || adSpend > 0 || offerRedemption > 0;
-      return { platform, grossRevenue, fee, pct, pctLabel, platformPayout, hasBreakdown, earnings, commission, adSpend, offerRedemption, adjustments };
+      const orderCount = rs.reduce((s, r) => s + (Number(r.order_count) || 0), 0);
+      return { platform, grossRevenue, fee, pct, pctLabel, platformPayout, hasBreakdown, earnings, commission, adSpend, offerRedemption, adjustments, orderCount };
     })
     .filter((b) => b.grossRevenue > 0 || b.platformPayout > 0);
 
@@ -374,9 +386,12 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
   const platformFeeTotal = Math.round(platformBlocks.reduce((s, b) => s + b.fee, 0) * 100) / 100;
   const platformPayoutTotal = Math.round(platformBlocks.reduce((s, b) => s + b.platformPayout, 0) * 100) / 100;
   const hasPayoutData = platformPayoutTotal > 0;
+  const totalOfferReimbursement = Math.round(
+    (offerReimbursements ?? []).reduce((s, r) => s + r.reimbursementAmount, 0) * 100
+  ) / 100;
   const kitchenPayout = hasPayoutData
-    ? Math.round((platformPayoutTotal - platformFeeTotal) * 100) / 100
-    : Math.round((platformGrossTotal - platformFeeTotal) * 100) / 100;
+    ? Math.round((platformPayoutTotal - platformFeeTotal + totalOfferReimbursement) * 100) / 100
+    : Math.round((platformGrossTotal - platformFeeTotal + totalOfferReimbursement) * 100) / 100;
   const catchUpLineItems = Array.isArray(invoice.line_items) ? invoice.line_items.filter(Boolean) as InvoiceLineItem[] : [];
   const isCatchUpInvoice = catchUpLineItems.length > 0;
   const isMonthlyFixedInvoice = franchisee.payment_model === 'monthly_fixed';
@@ -398,16 +413,15 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
     if (!isNaN(periodStartDate.getTime()) && monthlyFee > 0) {
       const monthsElapsed = (periodStartDate.getFullYear() - startYear) * 12 + (periodStartDate.getMonth() - startMonthIndex);
       const periodsApplied = Math.max(0, monthsElapsed + 1);
-      const waivedTotal = Math.min(initialDebt, periodsApplied * monthlyFee);
-      const balanceAfter = Math.max(0, Math.round((initialDebt - waivedTotal) * 100) / 100);
-      const balanceBefore = Math.max(0, Math.round((balanceAfter + monthlyFee) * 100) / 100);
-      maidstoneWaivedAmount = Math.min(monthlyFee, balanceBefore);
-      maidstoneBalanceAfter = balanceAfter;
+      // Balance owed before this month's invoice (based on prior periods applied)
+      const balanceBefore = Math.max(0, Math.round((initialDebt - (periodsApplied - 1) * monthlyFee) * 100) / 100);
+      maidstoneWaivedAmount = Math.round(Math.min(monthlyFee, balanceBefore) * 100) / 100;
+      maidstoneBalanceAfter = Math.max(0, Math.round((balanceBefore - maidstoneWaivedAmount) * 100) / 100);
       maidstoneAmountToPay = Math.max(0, Math.round((Number(invoice.fee_amount ?? 0) - maidstoneWaivedAmount) * 100) / 100);
     }
   }
   const noPaymentRequired = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && maidstoneAmountToPay <= 0;
-  const showMaidstoneWaiverFooter = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneWaivedAmount != null && maidstoneAmountToPay != null;
+  const showMaidstoneWaiverFooter = isMonthlyFixedInvoice && isMaidstoneSite && maidstoneWaivedAmount != null && maidstoneAmountToPay != null && maidstoneWaivedAmount > 0;
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -514,7 +528,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   {formatGBP(invoice.fee_amount)}
                 </Text>
               </View>
-              {maidstoneWaivedAmount != null && maidstoneBalanceAfter != null && (
+              {maidstoneWaivedAmount != null && maidstoneBalanceAfter != null && maidstoneWaivedAmount > 0 && (
                 <View style={{ marginTop: 6, padding: 8, backgroundColor: '#fff7ed', borderRadius: 4 }}>
                   <Text style={{ ...styles.footerText, color: '#9a3412' }}>
                     Fee waived toward arrears: {formatGBP(maidstoneWaivedAmount)}. Arrears balance after this month: {formatGBP(maidstoneBalanceAfter)}.
@@ -571,62 +585,107 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
               {platformBlocks.map((block, idx) => (
                 <View key={block.platform}>
                   {/* Platform header */}
-                  <View style={styles.platformSectionHeader}>
+                  <View style={[styles.platformSectionHeader, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
                     <Text style={styles.platformSectionHeaderText}>
-                      {`${PLATFORM_LABELS[block.platform]} (${block.pctLabel}%)`}
+                      {PLATFORM_LABELS[block.platform]}
                     </Text>
+                    {block.orderCount > 0 && (
+                      <Text style={[styles.platformSectionHeaderText, { fontWeight: 'normal' }]}>
+                        {block.orderCount} {block.orderCount === 1 ? 'order' : 'orders'}
+                      </Text>
+                    )}
                   </View>
 
                   {/* Gross revenue */}
                   <View style={styles.breakdownRow}>
                     <Text style={styles.breakdownLabel}>Gross revenue</Text>
-                    <Text style={styles.breakdownAmount}>
-                      {formatGBP(block.grossRevenue)}
-                    </Text>
+                    <Text style={styles.breakdownAmount}>{formatGBP(block.grossRevenue)}</Text>
                   </View>
+                  {showDescriptions && (
+                    <Text style={styles.breakdownDesc}>
+                      What customers paid in total on {PLATFORM_LABELS[block.platform]} this week — the starting point for all calculations
+                    </Text>
+                  )}
 
-                  {/* HT fee */}
+                  {/* HT operating charge */}
                   <View style={styles.breakdownRow}>
                     <Text style={styles.breakdownLabel}>
-                      {`Hungry Tum fee (${block.pctLabel}% of gross revenue)`}
+                      {`Hungry Tum operating charge (${block.pctLabel}%)`}
                     </Text>
                     <Text style={styles.breakdownAmount}>-{formatGBP(block.fee)}</Text>
                   </View>
+                  {showDescriptions && (
+                    <Text style={styles.breakdownDesc}>
+                      Our total operating charge — we manage the full operation on your behalf
+                    </Text>
+                  )}
 
                   {/* Platform commission */}
                   {!hidePlatformCommission && (block.commission > 0 || block.adSpend > 0) && (
-                    <View style={styles.breakdownRow}>
-                      <Text style={styles.breakdownLabel}>Platform commission</Text>
-                      <Text style={styles.breakdownAmount}>
-                        -{formatGBP(Math.round((block.commission + block.adSpend) * 100) / 100)}
-                      </Text>
-                    </View>
+                    <>
+                      <View style={styles.breakdownRow}>
+                        <Text style={styles.breakdownLabel}>
+                          {`${PLATFORM_LABELS[block.platform]} commission`}
+                        </Text>
+                        <Text style={styles.breakdownAmount}>
+                          -{formatGBP(Math.round((block.commission + block.adSpend) * 100) / 100)}
+                        </Text>
+                      </View>
+                      {showDescriptions && (
+                        <Text style={styles.breakdownDesc}>
+                          Platform fee, deducted from the gross revenue directly
+                        </Text>
+                      )}
+                    </>
                   )}
 
                   {/* Offer redemption */}
                   {block.offerRedemption > 0 && (
-                    <View style={styles.breakdownRow}>
-                      <Text style={styles.breakdownLabel}>
-                        Promotional offer costs (deducted by platform, covered by HT)
-                      </Text>
-                      <Text style={styles.breakdownAmount}>-{formatGBP(block.offerRedemption)}</Text>
-                    </View>
+                    <>
+                      <View style={styles.breakdownRow}>
+                        <Text style={styles.breakdownLabel}>
+                          Promotional campaign costs (we cover this)
+                        </Text>
+                        <Text style={styles.breakdownAmount}>-{formatGBP(block.offerRedemption)}</Text>
+                      </View>
+                      {showDescriptions && (
+                        <Text style={styles.breakdownDesc}>
+                          Discount campaigns we run on your behalf — platform deducts the cost, HT absorbs it
+                        </Text>
+                      )}
+                    </>
                   )}
 
                   {/* Adjustments */}
                   {block.adjustments > 0 && (
-                    <View style={styles.breakdownRow}>
-                      <Text style={styles.breakdownLabel}>Order adjustments</Text>
-                      <Text style={styles.breakdownAmount}>-{formatGBP(block.adjustments)}</Text>
-                    </View>
+                    <>
+                      <View style={styles.breakdownRow}>
+                        <Text style={styles.breakdownLabel}>Order adjustments</Text>
+                        <Text style={styles.breakdownAmount}>-{formatGBP(block.adjustments)}</Text>
+                      </View>
+                      {showDescriptions && (
+                        <Text style={styles.breakdownDesc}>
+                          Refunds on cancelled or incorrect orders — deducted automatically by the platform
+                        </Text>
+                      )}
+                    </>
                   )}
 
                   {/* Platform payout subtotal */}
                   {block.platformPayout > 0 && !isFeeOnlyInvoice && (
-                    <View style={styles.breakdownSubtotalRow}>
-                      <Text style={styles.breakdownSubtotalLabel}>Platform payout received</Text>
-                      <Text style={styles.breakdownSubtotalAmount}>{formatGBP(block.platformPayout)}</Text>
-                    </View>
+                    <>
+                      <View style={styles.breakdownSubtotalRow}>
+                        <Text style={styles.breakdownSubtotalLabel}>
+                          {`${PLATFORM_LABELS[block.platform]} payout`}
+                        </Text>
+                        <Text style={styles.breakdownSubtotalAmount}>{formatGBP(block.platformPayout)}</Text>
+                      </View>
+                      {showDescriptions && (
+                        <Text style={styles.breakdownDesc}>
+                          Platform payout after platform deductions
+                        </Text>
+                      )}
+                    </>
                   )}
 
                   {/* Divider between platforms */}
@@ -637,7 +696,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
               {/* Grand totals */}
               {hasPayoutData && !isFeeOnlyInvoice && (
                 <View style={styles.grandTotalRow}>
-                  <Text style={{ ...styles.totalLabel, width: '65%' }}>Total platform payout received</Text>
+                  <Text style={{ ...styles.totalLabel, width: '65%' }}>Total platform payouts</Text>
                   <Text style={{ ...styles.totalAmount, width: '35%' }}>{formatGBP(platformPayoutTotal)}</Text>
                 </View>
               )}
@@ -646,8 +705,8 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                 <View style={styles.grandTotalDeductRow}>
                   <Text style={{ ...styles.breakdownLabel, width: '65%' }}>
                     {franchisee.payment_model === 'percentage_per_platform'
-                      ? 'Total Hungry Tum fee'
-                      : `Total Hungry Tum fee (${invoice.fee_percentage}%)`}
+                      ? 'Our total operating fee'
+                      : `Our total operating fee (${invoice.fee_percentage}%)`}
                   </Text>
                   <Text style={{ ...styles.breakdownAmount, width: '35%' }}>
                     -{formatGBP(platformFeeTotal)}
@@ -662,15 +721,33 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                     <Text style={{ ...styles.totalAmount, width: '35%' }}>{formatGBP(platformGrossTotal)}</Text>
                   </View>
                   <View style={styles.grandTotalDeductRow}>
-                    <Text style={{ ...styles.totalLabel, width: '65%' }}>Total Hungry Tum fee</Text>
+                    <Text style={{ ...styles.totalLabel, width: '65%' }}>Our total operating fee</Text>
                     <Text style={{ ...styles.totalAmount, width: '35%' }}>{formatGBP(platformFeeTotal)}</Text>
                   </View>
                 </>
               ) : (
-                <View style={styles.payoutRow}>
-                  <Text style={styles.payoutLabel}>Your payout this week</Text>
-                  <Text style={styles.payoutAmount}>{formatGBP(kitchenPayout)}</Text>
-                </View>
+                <>
+                  <View style={styles.payoutRow}>
+                    <Text style={styles.payoutLabel}>What you make this week</Text>
+                    <Text style={styles.payoutAmount}>{formatGBP(kitchenPayout)}</Text>
+                  </View>
+                  {showDescriptions && (
+                    <Text style={{ fontSize: 7, color: '#15803d', marginTop: 3, marginBottom: 2 }}>
+                      Net earnings after everything
+                    </Text>
+                  )}
+                  {!payThem && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#fed7aa' }}>
+                      <View>
+                        <Text style={{ fontSize: 9, fontWeight: 700, color: '#ea580c' }}>Invoice amount to pay Hungry Tum</Text>
+                        <Text style={{ fontSize: 7, color: '#fb923c', marginTop: 1 }}>
+                          Please pay by bank transfer using the reference below
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, fontWeight: 700, color: '#ea580c' }}>{formatGBP(platformFeeTotal)}</Text>
+                    </View>
+                  )}
+                </>
               )}
             </>
           )}
@@ -685,7 +762,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                       : styles.feeLabel
                   }
                 >
-                  {isMonthlyFixedInvoice ? 'Total monthly franchise fee' : 'Total catch-up invoice'}
+                  {isMonthlyFixedInvoice ? 'Monthly operating charge' : 'Total catch-up invoice'}
                 </Text>
                 <Text
                   style={
@@ -697,7 +774,7 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   {formatGBP(displayedInvoiceFeeAmount)}
                 </Text>
               </View>
-              {isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && (
+              {isMonthlyFixedInvoice && isMaidstoneSite && maidstoneAmountToPay != null && maidstoneWaivedAmount != null && maidstoneWaivedAmount > 0 && (
                 <View style={{ ...styles.totalRow, marginTop: 8 }}>
                   <Text style={{ ...styles.totalLabel, ...styles.colPlatform }}>Amount to pay</Text>
                   <Text style={{ ...styles.totalAmount, ...styles.colAmount }}>
@@ -709,6 +786,35 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
             </>
           )}
         </View>
+
+        {/* Offer reimbursements */}
+        {offerReimbursements && offerReimbursements.length > 0 && (
+          <View style={{ marginBottom: 12 }}>
+            <View style={{ ...styles.platformSectionHeader, marginTop: 14 }}>
+              <Text style={styles.platformSectionHeaderText}>Offer Reimbursements</Text>
+            </View>
+            {offerReimbursements.map((r, i) => (
+              <View key={i} style={styles.breakdownRow}>
+                <Text style={{ ...styles.breakdownLabel, width: '50%' }}>
+                  {r.itemName}
+                </Text>
+                <Text style={{ ...styles.breakdownLabel, width: '25%' }}>
+                  {r.offerType === 'bogof' ? 'BOGOF' : `${r.offerType === 'percentage' ? '' : ''}${r.freeUnits} units`}{' '}
+                  ({r.platform === 'ubereats' ? 'Uber Eats' : 'Deliveroo'})
+                </Text>
+                <Text style={{ ...styles.breakdownAmount, width: '25%', color: '#15803d' }}>
+                  +{formatGBP(r.reimbursementAmount)}
+                </Text>
+              </View>
+            ))}
+            <View style={{ ...styles.breakdownSubtotalRow }}>
+              <Text style={{ ...styles.breakdownSubtotalLabel, width: '75%' }}>Total offer reimbursement</Text>
+              <Text style={{ ...styles.breakdownSubtotalAmount, width: '25%', color: '#15803d' }}>
+                +{formatGBP(totalOfferReimbursement)}
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Payment */}
         <View style={styles.footer}>
