@@ -885,11 +885,28 @@ export default function InvoicePDF({ invoice, franchisee, reports, slerpReports 
                   </Text>
                 </>
               ) : null}
-              {!isCatchUpInvoice && (
+              {!isCatchUpInvoice && isMonthlyFixedInvoice && (franchisee.bank_account_name || franchisee.bank_name || franchisee.sort_code || franchisee.account_number) ? (
+                <>
+                  <Text style={styles.footerText}>Please pay by bank transfer using the details below.</Text>
+                  {franchisee.bank_account_name && (
+                    <Text style={styles.footerText}>Account name: {franchisee.bank_account_name}</Text>
+                  )}
+                  {franchisee.bank_name && (
+                    <Text style={styles.footerText}>Bank: {franchisee.bank_name}</Text>
+                  )}
+                  {franchisee.sort_code && (
+                    <Text style={styles.footerText}>Sort code: {franchisee.sort_code}</Text>
+                  )}
+                  {franchisee.account_number && (
+                    <Text style={styles.footerText}>Account number: {franchisee.account_number}</Text>
+                  )}
+                  <Text style={styles.footerText}>Reference: {invoice.invoice_number}</Text>
+                </>
+              ) : !isCatchUpInvoice ? (
                 <Text style={styles.footerText}>
                   Reference: {invoice.invoice_number}
                 </Text>
-              )}
+              ) : null}
             </>
           )}
         </View>
